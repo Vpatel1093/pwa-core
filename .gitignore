@@ -1,0 +1,12 @@
+# Event logs and the server database stay local
+data/
+.local/
+dist/
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+# Databases made with --db outside data/
+*.db
+*.db-wal
+*.db-shm

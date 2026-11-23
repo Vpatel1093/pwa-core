@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PWA Core Demo</title>
+  <meta name="description" content="Local-first app">
+  <meta name="theme-color" content="#f7f5f0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="PWA Core Demo">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <button id="sync-status" class="sync"></button>
+    <details class="menu">
+      <summary aria-label="Settings">···</summary>
+      <div class="menu-body">
+        <button id="export-btn">Export backup</button>
+        <button id="import-btn">Import backup</button>
+        <button id="diagnostics-btn">Copy diagnostics</button>
+      </div>
+    </details>
+  </header>
+
+  <div id="storage-warning" class="banner danger" role="alert" hidden>
+    This browser won't let the app store data. Anything you add is lost when you close this page unless it syncs first.
+  </div>
+
+  <main id="view"><p class="muted">Loading…</p></main>
+
+  <div id="update-banner" class="banner" hidden>
+    <span>A new version is ready.</span>
+    <button>Reload</button>
+  </div>
+
+  <input id="import-file" type="file" accept=".json,.jsonl,application/json" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript>This app needs JavaScript.</noscript>
+</body>
+</html>

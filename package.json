@@ -1,0 +1,24 @@
+{
+  "name": "pwa-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Base for local-first PWAs: event log, offline shell, self-hosted sync server",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "npm run test:js && npm run test:py",
+    "test:js": "node --test test/*.test.js",
+    "test:py": "python3 -m unittest discover -s server -p 'test_*.py'",
+    "check": "node tools/pwacore/check.mjs",
+    "build": "node tools/pwacore/build.mjs",
+    "serve": "python3 server/server.py",
+    "new-app": "node tools/new-app.mjs",
+    "install-into": "node tools/install.mjs",
+    "lock": "node tools/pwacore/lock.mjs"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
+  }
+}
