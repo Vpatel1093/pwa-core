@@ -5,6 +5,7 @@ import {
 } from '../app/core/days.js';
 
 // Dates built with the local-time constructor, so these tests hold in any TZ.
+/** @param {number} y @param {number} mo @param {number} d */
 const local = (y, mo, d, h = 12, mi = 0) => new Date(y, mo - 1, d, h, mi);
 
 test('logicalDay returns the local calendar date after rollover', () => {

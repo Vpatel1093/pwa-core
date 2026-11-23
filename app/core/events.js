@@ -9,19 +9,57 @@
 
 import { uuidv7 } from './uuid.js';
 
+/**
+ * An event as stored and synced. `data` is the app's body for its type, so
+ * its shape is the app's to check (createEventChecks). Other top-level
+ * fields are the app's own (Mandalart's cell_id and day): unknown here, so
+ * an app narrows them before use.
+ * @typedef {{
+ *   id: string,
+ *   v: number,
+ *   type: string,
+ *   scope_id?: string,
+ *   ts: number,
+ *   tz?: string,
+ *   device_id: string,
+ *   app_version?: string,
+ *   data: Record<string, any>,
+ *   [field: string]: unknown,
+ * }} PwaEvent
+ */
+
+/**
+ * What makeEvent needs from the runtime (rt.ctx()).
+ * @typedef {{
+ *   clock: import('./clock.js').Clock,
+ *   deviceId: string,
+ *   appVersion?: string,
+ *   tz?: string,
+ *   now?: () => number,
+ *   eventVersion?: number,
+ * }} EventContext
+ */
+
+/** Returns null when the event is fine, or a short reason.
+ * @typedef {(e: any) => string | null} EventCheck */
+
 // Same limits as server/server.py (a test checks they match). Checking them
 // here means an event the server would refuse is never made or imported.
 export const MAX_ID_LEN = 100;
 export const MAX_EVENT_BYTES = 64 * 1024;
 
 const MAX_TS = Number.MAX_SAFE_INTEGER;
+/** @param {unknown} v @returns {v is string} */
 const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
+/** @param {unknown} v @returns {v is string} */
 const isId = (v) => isNonEmptyString(v) && v.length <= MAX_ID_LEN;
+/** @param {unknown} v @returns {v is Record<string, any>} */
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 // A lone surrogate (half an emoji) survives JSON in JS but can't be stored
 // as UTF-8, so the server refuses it.
+/** @param {unknown} v @returns {boolean} */
 function hasLoneSurrogate(v) {
   if (typeof v === 'string') return LONE_SURROGATE.test(v);
   if (Array.isArray(v)) return v.some(hasLoneSurrogate);
@@ -29,6 +67,7 @@ function hasLoneSurrogate(v) {
   return false;
 }
 
+/** @param {unknown} e */
 export function eventBytes(e) {
   return new TextEncoder().encode(JSON.stringify(e)).length;
 }
@@ -43,22 +82,29 @@ export function eventBytes(e) {
 // from a device whose clock was days ahead (which the clock won't follow).
 const ENVELOPE = new Set(['id', 'v', 'type', 'scope_id', 'ts', 'tz', 'device_id', 'app_version', 'data']);
 
+/**
+ * @param {EventContext} ctx
+ * @param {{ type: string, scope_id?: string, fields?: Record<string, unknown>, data?: Record<string, any>, after?: number }} spec
+ * @returns {PwaEvent}
+ */
 export function makeEvent(ctx, { type, scope_id, fields = {}, data = {}, after = 0 }) {
   for (const name of Object.keys(fields)) {
     if (ENVELOPE.has(name)) throw new Error(`makeEvent: ${name} is an envelope field, not an app field`);
   }
   const ts = Math.max(ctx.clock.tick(), Math.min(after + 1, MAX_TS));
+  /** @type {Record<string, unknown>} */
   const e = { id: uuidv7(ctx.now ? ctx.now() : Date.now()), v: ctx.eventVersion ?? 1, type };
   if (scope_id !== undefined) e.scope_id = scope_id;
   for (const [name, value] of Object.entries(fields)) if (value !== undefined) e[name] = value;
   Object.assign(e, { ts, tz: ctx.tz, device_id: ctx.deviceId, app_version: ctx.appVersion, data: structuredClone(data) });
-  return e;
+  return /** @type {PwaEvent} */ (e);
 }
 
 // The fields every event needs, whatever its type or version. Sync and
 // import keep any event that passes this, even one whose body this version
 // can't read: a later version may read it, and skipping it would move the
 // pull cursor past it for good. Returns null, or a short reason.
+/** @param {any} e @returns {string | null} */
 export function validateEnvelope(e) {
   if (!isPlainObject(e)) return 'event must be an object';
   if (!isId(e.id)) return 'id';
@@ -78,6 +124,10 @@ export function validateEnvelope(e) {
 // from a newer version pass as long as the envelope is sound, so a newer
 // app's events still sync through this one. State code uses this to decide
 // what it reads; sync and import only use validateEnvelope.
+/**
+ * @param {{ version?: number, bodies?: Record<string, EventCheck> }} [opts]
+ * @returns {EventCheck}
+ */
 export function createEventChecks({ version = 1, bodies = {} } = {}) {
   return function validateEvent(e) {
     const bad = validateEnvelope(e);
@@ -88,11 +138,12 @@ export function createEventChecks({ version = 1, bodies = {} } = {}) {
     try {
       return check(e);
     } catch (err) {
-      return `${e.type}: ${err?.message ?? err}`;
+      return `${e.type}: ${/** @type {any} */ (err)?.message ?? err}`;
     }
   };
 }
 
+/** @param {Iterable<{ ts?: unknown }>} events */
 export function maxTs(events) {
   let m = 0;
   for (const e of events) if (typeof e.ts === 'number' && e.ts > m) m = e.ts;

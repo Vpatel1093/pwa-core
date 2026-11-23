@@ -14,10 +14,15 @@ import { noteAdded, noteDone, buildNotes, listNotes } from '../app/js/notes.js';
 const SERVER = fileURLToPath(new URL('../server/server.py', import.meta.url));
 const STARTUP_TIMEOUT_MS = 10 * 1000;
 
-let dir;
-let server; // { proc, base }
+/** @typedef {{ proc: import('node:child_process').ChildProcess, base: string }} Server */
 
-// Start the real server on a free port. Returns { proc, base }.
+/** @type {string} */
+let dir;
+/** @type {Server} */
+let server;
+
+// Start the real server on a free port.
+/** @param {string} db @returns {Promise<Server>} */
 function startServer(db) {
   const proc = spawn('python3', [SERVER, '--port', '0', '--db', db], { stdio: ['ignore', 'ignore', 'pipe'] });
   const ready = new Promise((resolve, reject) => {
@@ -34,6 +39,7 @@ function startServer(db) {
   return ready;
 }
 
+/** @param {Server | undefined} s */
 function stopServer(s) {
   if (!s || s.proc.exitCode !== null) return Promise.resolve();
   return new Promise((resolve) => { s.proc.once('exit', resolve); s.proc.kill(); });
@@ -50,10 +56,12 @@ after(async () => {
 });
 
 // base is looked up per request so a test can swap the server underneath.
+/** @param {string} id */
 function device(id) {
   const clock = createClock();
   const ctx = { clock, deviceId: id, appVersion: 'test', tz: 'UTC' };
   const store = createMemoryStore();
+  /** @type {import('../app/core/sync.js').FetchLike} */
   const fetchVia = (url, opts) => fetch(server.base + url, opts);
   return { ctx, store, sync: createSync({ store, clock, fetch: fetchVia }) };
 }
@@ -111,5 +119,5 @@ test('a replaced server database is repopulated from a device', async () => {
 test('the server serves the app shell', async () => {
   const res = await fetch(`${server.base}/`);
   assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-type'), /text\/html/);
+  assert.match(res.headers.get('content-type') ?? '', /text\/html/);
 });

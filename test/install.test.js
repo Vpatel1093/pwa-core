@@ -9,12 +9,16 @@ import { checkLock, LOCK_FILE } from '../tools/pwacore/lock.mjs';
 
 const CORE = fileURLToPath(new URL('..', import.meta.url));
 
+/** @typedef {import('node:test').TestContext} TestContext */
+
+/** @param {TestContext} t */
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'pwacore-install-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
 
+/** @param {string} root @param {Record<string, string>} files */
 function put(root, files) {
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(join(root, path, '..'), { recursive: true });
@@ -23,6 +27,7 @@ function put(root, files) {
 }
 
 // A small stand-in for the core, so a test can add and remove core files.
+/** @param {TestContext} t @param {Record<string, string>} [extra] */
 function fakeCore(t, extra = {}) {
   const core = scratch(t);
   put(core, {
@@ -38,6 +43,7 @@ function fakeCore(t, extra = {}) {
   return core;
 }
 
+/** @param {TestContext} t */
 function fakeApp(t) {
   const app = scratch(t);
   put(app, { 'app/js/main.js': '// the app\n', 'server/server.py': '# launcher\n', 'package.json': '{}\n' });

@@ -11,14 +11,22 @@ import { fakeServer } from './helpers/fake-server.js';
 const validateEvent = createEventChecks({
   bodies: { 'flag.set': (e) => (typeof e.data.key === 'string' && typeof e.data.on === 'boolean' ? null : 'data') },
 });
+/** @typedef {import('../app/core/events.js').PwaEvent} PwaEvent */
+/** @typedef {import('../app/core/events.js').EventContext} EventContext */
+
+/** @param {EventContext} ctx @param {string} key @param {boolean} on */
 const flagSet = (ctx, key, on) => makeEvent(ctx, { type: 'flag.set', scope_id: 'ch', data: { key, on } });
+/** @param {PwaEvent[]} events */
 function buildFlags(events) {
+  /** @type {Map<string, import('../app/core/lww.js').Stamp & { value: boolean }>} */
   const flags = new Map();
   for (const e of events) if (e.type === 'flag.set' && validateEvent(e) === null) keepNewest(flags, e.data.key, e, e.data.on);
   return flags;
 }
+/** @param {ReturnType<typeof buildFlags>} flags @param {string} key */
 const isOn = (flags, key) => flags.get(key)?.value === true;
 
+/** @param {string} id @param {ReturnType<typeof fakeServer>} srv */
 function device(id, srv) {
   let t = 1000;
   const clock = createClock({ now: () => t });
@@ -27,7 +35,9 @@ function device(id, srv) {
   const sync = createSync({ store, clock, fetch: srv.fetch, now: () => t });
   return {
     ctx, clock, store, sync,
+    /** @param {number} ms */
     at(ms) { t = ms; return ctx; },
+    /** @param {string} key */
     async tick(key, on = true) {
       const e = flagSet(ctx, key, on);
       await store.addEvents([e], { local: true });
@@ -185,7 +195,7 @@ test('events the server rejects leave the outbox and are listed, and the rest st
   assert.equal(r.pushError, null);
   assert.equal(await a.store.outboxCount(), 0);
   assert.equal(srv2.rows.length, 1);
-  assert.deepEqual((await a.store.getMeta('rejected')).map((x) => x.id), [bad.id]);
+  assert.deepEqual((await a.store.getMeta('rejected')).map((/** @type {{ id: string }} */ x) => x.id), [bad.id]);
 });
 
 test('a failing push still pulls other devices\' changes', async () => {
@@ -203,7 +213,7 @@ test('a failing push still pulls other devices\' changes', async () => {
       : srv.fetch(url, opts)),
   });
   const r = await sync.syncOnce();
-  assert.match(r.pushError.message, /500: boom/);
+  assert.match(/** @type {Error} */ (r.pushError).message, /500: boom/);
   assert.equal(r.pulled.length, 1);
   assert.equal(await a.store.outboxCount(), 1);
   assert.equal(await a.store.getMeta('lastSyncAt', null), null);
@@ -215,7 +225,7 @@ test('a request that never answers times out instead of hanging sync', async () 
     store: a.store,
     clock: a.clock,
     timeoutMs: 20,
-    fetch: (url, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))),
+    fetch: (url, { signal } = {}) => new Promise((_, reject) => signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))),
   });
   await assert.rejects(sync.syncOnce(), /timed out/);
 });
@@ -267,7 +277,7 @@ test('server errors reject and keep the outbox', async () => {
 
 test('invalid events from the server are skipped', async () => {
   const srv = fakeServer();
-  srv.rows.push({ id: 'junk', type: 'flag.set' });
+  srv.rows.push(/** @type {PwaEvent} */ (/** @type {unknown} */ ({ id: 'junk', type: 'flag.set' }))); // invalid on purpose
   const a = device('a', srv);
   const r = await a.sync.syncOnce();
   assert.equal(r.pulled.length, 0);

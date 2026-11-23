@@ -14,6 +14,16 @@ import { EVENT_VERSION } from './config.js';
 export const MAX_NOTE_CHARS = 500;
 const NOTE_ID = /^n_[0-9a-z]{8}$/;
 
+/** @typedef {import('../core/events.js').PwaEvent} PwaEvent */
+/** @typedef {import('../core/events.js').EventContext} EventContext */
+/**
+ * @typedef {{
+ *   added: Map<string, { text: string, ts: number, id: string }>,
+ *   done: Map<string, import('../core/lww.js').Stamp & { value: boolean }>,
+ * }} Notes
+ */
+
+/** @param {unknown} t */
 const isText = (t) => typeof t === 'string' && t.length > 0 && t.length <= MAX_NOTE_CHARS && t === t.trim();
 
 export const validateEvent = createEventChecks({
@@ -30,20 +40,29 @@ export const validateEvent = createEventChecks({
   },
 });
 
+/** @param {EventContext} ctx @param {string} text */
 export function noteAdded(ctx, text) {
   return makeEvent(ctx, { type: 'note.added', data: { note_id: randomId('n'), text: String(text).trim() } });
 }
 
 // after: the ts of the done state being replaced (listNotes gives doneTs).
+/**
+ * @param {EventContext} ctx
+ * @param {string} noteId
+ * @param {boolean} done
+ * @param {{ after?: number }} [opts]
+ */
 export function noteDone(ctx, noteId, done, { after } = {}) {
   return makeEvent(ctx, { type: 'note.done', data: { note_id: noteId, done }, after });
 }
 
+/** @returns {Notes} */
 export function createNotes() {
   return { added: new Map(), done: new Map() };
 }
 
 // Mutates and returns `state`. Safe to call with the same event twice.
+/** @param {Notes} state @param {PwaEvent} e */
 export function applyEvent(state, e) {
   if (validateEvent(e) !== null || e.v > EVENT_VERSION) return state;
   if (e.type === 'note.added') {
@@ -54,6 +73,7 @@ export function applyEvent(state, e) {
   return state;
 }
 
+/** @param {PwaEvent[]} events */
 export function buildNotes(events) {
   const state = createNotes();
   for (const e of events) applyEvent(state, e);
@@ -61,6 +81,7 @@ export function buildNotes(events) {
 }
 
 // Newest first. A note.done that arrived before its note waits in `done`.
+/** @param {Notes} state */
 export function listNotes(state) {
   return [...state.added]
     .map(([noteId, n]) => {

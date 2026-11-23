@@ -1,7 +1,7 @@
 // npm run check: static checks, separate from the tests. Every JS file must
 // parse (node --check), every Python file must compile, and every JSON file
-// must parse. This is a syntax check, not a type check: the code is plain
-// JS with no TypeScript.
+// must parse. The type check is separate (npm run typecheck: tsc reads the
+// JSDoc types, see tsconfig.json), and npm run check runs it after this.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,13 +10,16 @@ import { listFiles } from './build-lib.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const files = ['app', 'test', 'tools', 'server'].flatMap((d) => listFiles(join(root, d)).map((f) => join(d, f)));
+/** @type {string[]} */
 const problems = [];
+/** @param {unknown} err */
+const stderrOf = (err) => String(/** @type {{ stderr?: unknown }} */ (err).stderr).trim();
 
 for (const f of files.filter((x) => /\.m?js$/.test(x))) {
   try {
     execFileSync(process.execPath, ['--check', join(root, f)], { stdio: 'pipe' });
   } catch (err) {
-    problems.push(`${f}: ${String(err.stderr).trim().split('\n').slice(0, 5).join('\n    ')}`);
+    problems.push(`${f}: ${stderrOf(err).split('\n').slice(0, 5).join('\n    ')}`);
   }
 }
 
@@ -27,7 +30,7 @@ if (py.length) {
   try {
     execFileSync('python3', ['-c', script, ...py.map((f) => join(root, f))], { stdio: 'pipe' });
   } catch (err) {
-    problems.push(`python: ${String(err.stderr).trim().split('\n').slice(-3).join('\n    ')}`);
+    problems.push(`python: ${stderrOf(err).split('\n').slice(-3).join('\n    ')}`);
   }
 }
 
@@ -35,7 +38,7 @@ for (const f of [...files.filter((x) => x.endsWith('.json') || x.endsWith('.webm
   try {
     JSON.parse(readFileSync(join(root, f), 'utf8'));
   } catch (err) {
-    problems.push(`${f}: ${err.message}`);
+    problems.push(`${f}: ${/** @type {Error} */ (err).message}`);
   }
 }
 

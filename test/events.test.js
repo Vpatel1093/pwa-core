@@ -160,7 +160,7 @@ test('createEventChecks lets unknown types and future versions through', () => {
 
 test('createEventChecks turns a throwing body check into a reason', () => {
   const strict = createEventChecks({ bodies: { boom: (e) => e.data.missing.deep } });
-  assert.match(strict(makeEvent(ctx(), { type: 'boom' })), /^boom: /);
+  assert.match(strict(makeEvent(ctx(), { type: 'boom' })) ?? '', /^boom: /);
 });
 
 test('maxTs finds the newest timestamp or 0', () => {

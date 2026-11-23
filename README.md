@@ -46,6 +46,7 @@ Then make it your app:
 | `server/server.py` | Starts the server with the app's database name and version | The app |
 | `tools/pwacore/` | `build`, `check`, the vendored-copy lock check | The core |
 | `tools/new-app.mjs`, `tools/install.mjs` | Start an app; install the core into one (core only) | The core |
+| `tsconfig.json`, `tsconfig.sw.json` | The type check (see Checks). A new app gets them | The app |
 | `core.lock.json` | In an app: the core version and source, and a sha256 per vendored file | Written by `install.mjs` |
 | `docs/` | [Data format](docs/data-format.md), [data and recovery](docs/data-and-recovery.md) | The core |
 
@@ -75,11 +76,14 @@ Open the `https://<machine>.<tailnet>.ts.net` address and use Add to Home Screen
 
 ```sh
 npm test          # node:test for app logic and tools, unittest for the server
-npm run check     # static check: JS parses, Python compiles, JSON parses
+npm run check     # static check: JS parses, Python compiles, JSON parses; then typecheck
+npm run typecheck # tsc on the JSDoc types, strict
 npm run build     # import graph and offline file list, then a copy in dist/
 ```
 
-Tests need Node 20+ (`npm install` once for the test-only IndexedDB fake) and Python 3.9+. `check` is a syntax check, not a type check: there is no TypeScript. `build` is only needed to host the app somewhere other than the Python server.
+Tests need Node 20+ (`npm install` once for TypeScript and the test-only IndexedDB fake) and Python 3.9+. `build` is only needed to host the app somewhere other than the Python server.
+
+**Types.** The code stays plain JS with no build step. Types are JSDoc comments, and TypeScript only checks them (`checkJs`, `noEmit`, `strict`). `tsconfig.json` covers `app/`, `tools/` and `test/` with the DOM and Node types; `tsconfig.sw.json` covers `app/sw.js` with the WebWorker types, since a page and a worker can't share one global. The shared types (`PwaEvent`, `Store`, `Runtime`, `SyncStatus`) are typedefs in `app/core/`, so an app gets them with the vendored core: `/** @type {import('../core/events.js').PwaEvent} */`. A `@ts-expect-error` carries a one-line reason.
 
 **Releasing a change:** bump `APP_VERSION` in `app/js/config.js`, `VERSION` in `app/sw.js` and `APP_VERSION` in `server/server.py` (a test checks they match). Installed copies keep the old code until you bump, then show a "new version" banner. A change to `app/core/` or `server/` also bumps `CORE_VERSION` in `app/core/version.js` and `VERSION` in `server/pwacore/server.py`.
 

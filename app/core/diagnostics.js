@@ -6,10 +6,31 @@
 import { MAX_SKEW_MS } from './clock.js';
 
 const KNOWN_TYPE = /^[a-z]+(\.[a-z]+)*$/;
-const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : 'never');
+/** @param {unknown} ms */
+const iso = (ms) => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : 'never');
+/** @param {unknown} s */
 const tail = (s) => (typeof s === 'string' && s ? `…${s.slice(-6)}` : 'none');
+/** @param {unknown} s @param {number} n */
 const clip = (s, n) => String(s ?? '').slice(0, n);
 
+/**
+ * meta: the store's meta values (lastSyncAt, serverId, pullCursor,
+ * clockLast, lastExportAt, rejected). sync: the runtime's status.
+ * @param {{
+ *   now: number,
+ *   version: string,
+ *   deviceId?: string | null,
+ *   storeKind: string,
+ *   persisted?: boolean,
+ *   events: { type: string, ts: number }[],
+ *   outboxCount: number,
+ *   meta?: Record<string, any>,
+ *   sync?: { status?: string, error?: string | null },
+ *   extra?: [string, unknown][] | null,
+ *   userAgent?: string,
+ *   tz?: string,
+ * }} info
+ */
 export function diagnosticsText({
   now, version, deviceId, storeKind, persisted, events, outboxCount, meta = {}, sync = {}, extra = [], userAgent, tz,
 }) {

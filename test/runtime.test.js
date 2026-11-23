@@ -9,8 +9,15 @@ import { fakeServer } from './helpers/fake-server.js';
 
 let channelCount = 0;
 
+/** @typedef {import('../app/core/runtime.js').Runtime} Runtime */
+
+/**
+ * @param {Partial<Parameters<typeof startRuntime>[0]> & { srv?: ReturnType<typeof fakeServer>, t?: { now: number } }} [opts]
+ */
 async function boot({ store = createMemoryStore(), srv = fakeServer(), t = { now: 1000 }, ...opts } = {}) {
+  /** @type {{ source: string, ids: string[] }[]} */
   const seen = [];
+  /** @type {import('../app/core/runtime.js').SyncStatus[]} */
   const statuses = [];
   const rt = await startRuntime({
     store,
@@ -26,6 +33,7 @@ async function boot({ store = createMemoryStore(), srv = fakeServer(), t = { now
   return { rt, store, srv, t, seen, statuses };
 }
 
+/** @param {Runtime} rt */
 const note = (rt, text = 'hi') => makeEvent(rt.ctx(), { type: 'note.added', data: { text } });
 
 test('a device id is made once and kept across restarts', async () => {
@@ -65,7 +73,7 @@ test('record stores an event, queues it for sync, and tells the app', async () =
   assert.deepEqual((await store.allEvents()).map((x) => x.id), [e.id]);
   assert.equal(await store.outboxCount(), 1);
   assert.deepEqual(seen.at(-1), { source: 'local', ids: [e.id] });
-  assert.equal(statuses.at(-1).pending, 1);
+  assert.equal(statuses.at(-1)?.pending, 1);
   assert.equal(await store.getMeta('clockLast'), rt.clock.last);
   rt.close();
 });
@@ -147,7 +155,7 @@ test('runSync says error, with the reason, when the server answers with a failur
   await rt.record(note(rt));
   const s = await rt.runSync();
   assert.equal(s.status, 'error');
-  assert.match(s.error, /HTTP 500: server error/);
+  assert.match(s.error ?? '', /HTTP 500: server error/);
   rt.close();
 });
 
@@ -155,7 +163,7 @@ test('runSync({ manual: true }) shows that it is syncing while it runs', async (
   const { rt, statuses } = await boot();
   await rt.runSync({ manual: true });
   assert.ok(statuses.some((s) => s.manual === true));
-  assert.equal(statuses.at(-1).manual, false);
+  assert.equal(statuses.at(-1)?.manual, false);
   rt.close();
 });
 

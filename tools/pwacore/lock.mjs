@@ -14,10 +14,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const LOCK_FILE = 'core.lock.json';
 export const VENDORED = ['app/core', 'server/pwacore', 'tools/pwacore'];
 
+/** @typedef {Record<string, string>} FileHashes path -> sha256 hex */
+
+/** @param {string} name */
 const skip = (name) => name.startsWith('.') || name === '__pycache__' || name.endsWith('.pyc');
 
+/** @param {import('node:crypto').BinaryLike} buf */
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
+/** @param {string} dir @param {string} base @returns {string[]} */
 function walk(dir, base) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).flatMap((name) => {
@@ -28,24 +33,29 @@ function walk(dir, base) {
 }
 
 // Every file in the vendored folders under root, sorted, as '/' paths.
+/** @param {string} root */
 export function listVendored(root) {
   root = resolve(root);
   return VENDORED.flatMap((d) => walk(join(root, d), root)).sort();
 }
 
+/** @param {string} root @param {string[]} files @returns {FileHashes} */
 export function hashFiles(root, files) {
   return Object.fromEntries(files.map((f) => [f, sha256(readFileSync(join(root, f)))]));
 }
 
+/** @param {FileHashes} files */
 export function treeHash(files) {
   return sha256(Object.entries(files).map(([f, h]) => `${h}  ${f}\n`).join(''));
 }
 
 // Returns a list of problems; empty means the copy matches its lock.
+/** @param {string} root */
 export function checkLock(root) {
   root = resolve(root);
   const lockPath = join(root, LOCK_FILE);
   if (!existsSync(lockPath)) return [`${LOCK_FILE} is missing: install the core with pwa-core's tools/install.mjs`];
+  /** @type {{ files?: FileHashes }} */
   const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
   const problems = [];
   for (const [f, hash] of Object.entries(lock.files ?? {})) {

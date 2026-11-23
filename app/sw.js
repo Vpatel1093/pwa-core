@@ -39,28 +39,32 @@ const ASSETS = [
   'manifest.webmanifest',
 ];
 
-self.addEventListener('install', (event) => {
+// The worker's global, typed for tsconfig.sw.json (the WebWorker lib types
+// `self` as a plain worker).
+const sw = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));
+
+sw.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' })))),
   );
 });
 
-self.addEventListener('activate', (event) => {
+sw.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => k.startsWith(`${APP_ID}-`) && k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
+      .then(() => sw.clients.claim()),
   );
 });
 
-self.addEventListener('message', (event) => {
-  if (event.data === 'skipWaiting') self.skipWaiting();
+sw.addEventListener('message', (event) => {
+  if (event.data === 'skipWaiting') sw.skipWaiting();
 });
 
-self.addEventListener('fetch', (event) => {
+sw.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (req.method !== 'GET' || url.origin !== sw.location.origin) return;
   if (url.pathname.includes('/api/')) return;
   if (req.mode === 'navigate') {
     event.respondWith(caches.match('index.html').then((hit) => hit || fetch(req)));

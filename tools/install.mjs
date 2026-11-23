@@ -18,8 +18,10 @@ import { LOCK_FILE, VENDORED, checkLock, hashFiles, listVendored, treeHash } fro
 
 export { VENDORED };
 
+/** @param {string} from */
 export const coreFiles = (from) => listVendored(from);
 
+/** @param {string} dir */
 function removeEmptyDirs(dir) {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir, { withFileTypes: true })) {
@@ -28,6 +30,9 @@ function removeEmptyDirs(dir) {
   if (!readdirSync(dir).length) rmdirSync(dir);
 }
 
+/** @typedef {{ commit?: string | null, uncommitted?: boolean }} Source */
+
+/** @param {{ from: string, to: string, source?: Source, force?: boolean }} opts */
 export function installCore({ from, to, source = {}, force = false }) {
   from = resolve(from);
   to = resolve(to);
@@ -53,7 +58,9 @@ export function installCore({ from, to, source = {}, force = false }) {
 
 // This repo's state, for the lock. Before the first commit there is no
 // commit to name, so the lock says so and the tree hash identifies the copy.
+/** @param {string} from @returns {Source} */
 export function gitSource(from) {
+  /** @param {...string} args */
   const git = (...args) => execFileSync('git', args, { cwd: from, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   let commit = null;
   try { commit = git('rev-parse', '--verify', 'HEAD'); } catch { /* no commit yet */ }
@@ -75,7 +82,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const lock = installCore({ from, to: rest[0], source: gitSource(from), force });
     console.log(`Installed pwa-core ${lock.core_version} (${Object.keys(lock.files).length} files, commit ${lock.source.commit ?? 'none yet'}) into ${rest[0]}.`);
   } catch (err) {
-    console.error(err.message);
+    console.error(/** @type {Error} */ (err).message);
     process.exit(1);
   }
 }

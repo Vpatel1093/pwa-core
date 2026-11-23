@@ -6,12 +6,22 @@ import { validateEnvelope } from './events.js';
 
 export const BACKUP_VERSION = 1;
 
+/** @typedef {import('./events.js').PwaEvent} PwaEvent */
+/** What parseImport returns for a list of events. An app's recognize hook
+ * can return its own kinds.
+ * @typedef {{ kind: 'events', events: PwaEvent[], skipped: number }} EventsImport */
+
 // format: the app's own name for its backups, such as "trips-events". It
 // keeps one app from importing another app's file as its own.
+/** @param {unknown} format @returns {asserts format is string} */
 function needFormat(format) {
   if (typeof format !== 'string' || !format) throw new Error('A backup format name is required.');
 }
 
+/**
+ * @param {PwaEvent[]} events
+ * @param {{ format?: string, appVersion?: string, now?: Date }} [opts]
+ */
 export function makeBackup(events, { format, appVersion, now = new Date() } = {}) {
   needFormat(format);
   return {
@@ -23,15 +33,18 @@ export function makeBackup(events, { format, appVersion, now = new Date() } = {}
   };
 }
 
+/** @param {string} prefix @param {string} today */
 export function backupFilename(prefix, today) {
   return `${prefix}-backup-${today}.json`;
 }
 
+/** @param {unknown[]} list @returns {EventsImport} */
 function eventsResult(list) {
+  /** @type {PwaEvent[]} */
   const events = [];
   let skipped = 0;
   for (const e of list) {
-    if (validateEnvelope(e) === null) events.push(e);
+    if (validateEnvelope(e) === null) events.push(/** @type {PwaEvent} */ (e)); // the envelope checks passed
     else skipped++;
   }
   return { kind: 'events', events, skipped };
@@ -39,6 +52,12 @@ function eventsResult(list) {
 
 // recognize(data): return a result for a file the app knows, or null.
 // expected: what the error names when nothing fits ("a backup or a chart").
+/**
+ * @template [R=never]
+ * @param {unknown} text
+ * @param {{ format?: string, recognize?: (data: any) => R | null, expected?: string }} [opts]
+ * @returns {EventsImport | R}
+ */
 export function parseImport(text, { format, recognize = () => null, expected = 'a backup' } = {}) {
   needFormat(format);
   const trimmed = String(text ?? '').trim();

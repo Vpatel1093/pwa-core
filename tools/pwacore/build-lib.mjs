@@ -13,17 +13,21 @@ const PATTERNS = [
   /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
+/** @param {string} src */
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // Module specifiers in source order.
+/** @param {string} src */
 export function findImports(src) {
   const code = stripComments(src);
+  /** @type {[number, string][]} */
   const found = [];
   for (const re of PATTERNS) for (const m of code.matchAll(re)) found.push([m.index, m[1]]);
   return found.sort((a, b) => a[0] - b[0]).map(([, spec]) => spec);
 }
 
 // Every file under dir as a '/'-separated relative path, dotfiles left out.
+/** @param {string} dir @param {string} [base] @returns {string[]} */
 export function listFiles(dir, base = dir) {
   return readdirSync(dir).flatMap((name) => {
     if (name.startsWith('.')) return [];
@@ -32,9 +36,11 @@ export function listFiles(dir, base = dir) {
   }).sort();
 }
 
+/** @param {string} s */
 const isUrl = (s) => /^[a-z]+:\/\//i.test(s);
 
 // Returns a list of problems; empty means the app is sound.
+/** @param {string} appDir */
 export function checkApp(appDir) {
   const root = resolve(appDir);
   const files = listFiles(root);
@@ -64,6 +70,7 @@ export function checkApp(appDir) {
 
 // Check, then copy app/ to outDir (replacing it). Nothing is written if the
 // check fails.
+/** @param {string} appDir @param {string} outDir */
 export function buildApp(appDir, outDir) {
   const problems = checkApp(appDir);
   if (problems.length) return { problems, files: 0 };

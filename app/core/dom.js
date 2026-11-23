@@ -1,6 +1,15 @@
 // Tiny DOM helpers. No framework: the whole UI is a few hundred elements
 // and is simply rebuilt on each change.
 
+/** A child for h(): a node, text, a list of children, or nothing.
+ * @typedef {Node | string | number | null | undefined | false | Child[]} Child */
+
+/**
+ * @param {string} tag
+ * @param {Record<string, any>} [attrs]
+ * @param {...Child} children
+ * @returns {HTMLElement}
+ */
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -16,6 +25,7 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+/** @param {HTMLElement} el @param {Child[]} children */
 function append(el, children) {
   for (const c of children) {
     if (c === null || c === undefined || c === false) continue;
@@ -27,18 +37,29 @@ function append(el, children) {
 // Tap vs long-press on elements matching `selector` inside `root`.
 // Long-press also answers the context-menu gesture (right click, the
 // keyboard menu key, Shift+F10), so it isn't touch-only.
+/**
+ * @param {Element} root
+ * @param {string} selector
+ * @param {{ tap: (target: Element) => void, longPress: (target: Element) => void, delay?: number }} handlers
+ */
 export function onPress(root, selector, { tap, longPress, delay = 450 }) {
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
+  /** @type {{ x: number, y: number } | null} */
   let start = null;
   let fired = false;
 
   const cancel = () => {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     timer = null;
   };
+  // Pointer, click and context-menu events always target an element.
+  /** @param {Event} e */
+  const targetOf = (e) => /** @type {Element} */ (e.target).closest(selector);
 
-  root.addEventListener('pointerdown', (e) => {
-    const target = e.target.closest(selector);
+  root.addEventListener('pointerdown', (ev) => {
+    const e = /** @type {PointerEvent} */ (ev);
+    const target = targetOf(e);
     if (!target || !root.contains(target) || e.button !== 0) return;
     fired = false;
     start = { x: e.clientX, y: e.clientY };
@@ -50,12 +71,13 @@ export function onPress(root, selector, { tap, longPress, delay = 450 }) {
       longPress(target);
     }, delay);
   });
-  root.addEventListener('pointermove', (e) => {
+  root.addEventListener('pointermove', (ev) => {
+    const e = /** @type {PointerEvent} */ (ev);
     if (timer && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
   });
   for (const type of ['pointerup', 'pointercancel', 'pointerleave']) root.addEventListener(type, cancel);
   root.addEventListener('click', (e) => {
-    const target = e.target.closest(selector);
+    const target = targetOf(e);
     if (!target || !root.contains(target)) return;
     if (fired) {
       fired = false;
@@ -65,7 +87,7 @@ export function onPress(root, selector, { tap, longPress, delay = 450 }) {
     tap(target);
   });
   root.addEventListener('contextmenu', (e) => {
-    const target = e.target.closest(selector);
+    const target = targetOf(e);
     if (!target || !root.contains(target)) return;
     e.preventDefault();
     if (fired) return; // touch long-press already handled it

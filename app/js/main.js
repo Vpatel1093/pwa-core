@@ -12,21 +12,36 @@ import { logicalDay } from '../core/days.js';
 import { APP_NAME, APP_ID, APP_VERSION, EVENT_VERSION, BACKUP_FORMAT } from './config.js';
 import { applyEvent, createNotes, listNotes, noteAdded, noteDone } from './notes.js';
 
-const $ = (id) => document.getElementById(id);
+/** @typedef {import('../core/runtime.js').Runtime} Runtime */
+
+// Every id this file looks up is in index.html.
+/** @param {string} id */
+const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
+/** @type {{ rt: Runtime | null, notes: import('./notes.js').Notes, status: import('../core/runtime.js').SyncStatus | null }} */
 const app = { rt: null, notes: createNotes(), status: null };
 
+// init sets app.rt before it renders or wires any button, so the handlers
+// that call this always have it.
+function runtime() {
+  if (!app.rt) throw new Error('The runtime has not started.');
+  return app.rt;
+}
+
+/** @type {ReturnType<typeof setTimeout> | undefined} */
+let toastTimer;
+/** @param {string} text */
 function toast(text) {
   const el = $('toast');
   el.textContent = text;
   el.classList.add('show');
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => el.classList.remove('show'), 3200);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
 // ---------- render ----------
 
 function renderHeader() {
-  const s = app.status ?? app.rt.status;
+  const s = app.status ?? runtime().status;
   const { text, stale, label } = syncLabel(s);
   const btn = $('sync-status');
   btn.textContent = text;
@@ -53,45 +68,52 @@ function render() {
 
 // ---------- actions ----------
 
+/** @param {import('../core/events.js').PwaEvent} event */
 async function save(event) {
   try {
-    await app.rt.record(event);
+    await runtime().record(event);
   } catch (err) {
-    toast(err?.name === 'QuotaExceededError'
+    toast(/** @type {Error | undefined} */ (err)?.name === 'QuotaExceededError'
       ? "Couldn't save that: this device is out of storage space."
       : "Couldn't save that on this device. Try again, or export a backup.");
   }
 }
 
+/** @param {SubmitEvent} e */
 async function addNote(e) {
   e.preventDefault();
-  const text = e.target.elements.text.value.trim();
+  const form = /** @type {HTMLFormElement} */ (e.target);
+  const text = /** @type {HTMLInputElement} */ (form.elements.namedItem('text')).value.trim();
   if (!text) return;
-  await save(noteAdded(app.rt.ctx(), text));
+  await save(noteAdded(runtime().ctx(), text));
   $('note-text')?.focus();
 }
 
-const toggle = (n) => save(noteDone(app.rt.ctx(), n.noteId, !n.done, { after: n.doneTs }));
+/** @param {ReturnType<typeof listNotes>[number]} n */
+const toggle = (n) => save(noteDone(runtime().ctx(), n.noteId, !n.done, { after: n.doneTs }));
 
+/** @param {File} file */
 async function importFile(file) {
   try {
     const parsed = parseImport(await file.text(), { format: BACKUP_FORMAT });
-    const added = await app.rt.importEvents(parsed.events);
+    const added = await runtime().importEvents(parsed.events);
     const dupes = parsed.events.length - added.length;
     toast(`Imported ${added.length} events${dupes ? `, ${dupes} already here` : ''}${parsed.skipped ? `, ${parsed.skipped} unreadable` : ''}.`);
   } catch (err) {
-    toast(err.message);
+    toast(/** @type {Error} */ (err).message);
   }
 }
 
 async function copyDiagnostics() {
-  const { store } = app.rt;
+  const rt = runtime();
+  const { store } = rt;
+  /** @type {Record<string, unknown>} */
   const meta = {};
   for (const key of ['lastSyncAt', 'lastExportAt', 'serverId', 'pullCursor', 'clockLast', 'rejected']) meta[key] = await store.getMeta(key, null);
   const text = diagnosticsText({
-    now: Date.now(), version: APP_VERSION, deviceId: app.rt.deviceId, storeKind: store.kind,
+    now: Date.now(), version: APP_VERSION, deviceId: rt.deviceId, storeKind: store.kind,
     persisted: await navigator.storage?.persisted?.(), events: await store.allEvents(),
-    outboxCount: await store.outboxCount(), meta, sync: app.rt.status,
+    outboxCount: await store.outboxCount(), meta, sync: rt.status,
     extra: [['Notes', listNotes(app.notes).length]],
     userAgent: navigator.userAgent, tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
@@ -111,7 +133,7 @@ async function init() {
     onVersionChange: () => { $('update-banner').hidden = false; },
   });
   if (store.kind === 'memory') $('storage-warning').hidden = false;
-  app.rt = await startRuntime({
+  const rt = await startRuntime({
     store,
     appVersion: APP_VERSION,
     eventVersion: EVENT_VERSION,
@@ -125,15 +147,17 @@ async function init() {
       if (app.rt) renderHeader();
     },
   });
+  app.rt = rt;
 
-  $('sync-status').addEventListener('click', () => app.rt.runSync({ manual: true }));
-  $('export-btn').addEventListener('click', () => exportBackup(app.rt, {
+  $('sync-status').addEventListener('click', () => rt.runSync({ manual: true }));
+  $('export-btn').addEventListener('click', () => exportBackup(rt, {
     format: BACKUP_FORMAT, prefix: APP_ID, appVersion: APP_VERSION, today: logicalDay(),
   }));
   $('import-btn').addEventListener('click', () => $('import-file').click());
   $('import-file').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    e.target.value = '';
+    const input = /** @type {HTMLInputElement} */ (e.target);
+    const file = input.files?.[0];
+    input.value = '';
     if (file) importFile(file);
   });
   $('diagnostics-btn').addEventListener('click', copyDiagnostics);
@@ -142,7 +166,7 @@ async function init() {
   render();
   registerServiceWorker($('update-banner'));
   askPersist(store);
-  keepSyncing(app.rt);
+  keepSyncing(rt);
 }
 
 init().catch((err) => showFatal($('view'), err));

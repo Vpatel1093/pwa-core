@@ -19,17 +19,24 @@ const SKIP_TOP = new Set(['.git', 'node_modules', 'data', 'dist', '.local', 'TAS
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
 const EXCLUDE = ['TASK.md', 'CLAUDE.local.md', '.local/'];
 
+/** @param {string} s */
 const html = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/** @param {string} file @param {(text: string) => string} fn */
 function edit(file, fn) {
   writeFileSync(file, fn(readFileSync(file, 'utf8')));
 }
 
+/** @param {string} text @param {RegExp} re @param {string} value @param {string} file */
 function replaceOnce(text, re, value, file) {
   if (!re.test(text)) throw new Error(`new-app: couldn't find ${re} in ${file}`);
   return text.replace(re, () => value);
 }
 
+/**
+ * @param {{ from: string, to: string, id?: string, name?: string, git?: boolean, email?: string | null }} opts
+ * @returns {string} the new app's folder
+ */
 export function newApp({ from, to, id, name, git = false, email = null }) {
   if (!ID_RE.test(id ?? '')) throw new Error('The app id must be 2-40 lowercase letters, digits or dashes, starting with a letter.');
   name = String(name ?? '').trim();
@@ -51,6 +58,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
     },
   });
 
+  /** @param {string} p */
   const f = (p) => join(to, p);
   edit(f('app/js/config.js'), (s) => {
     s = replaceOnce(s, /export const APP_NAME = .*;/, `export const APP_NAME = ${JSON.stringify(name)};`, 'config.js');
@@ -110,6 +118,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
   return to;
 }
 
+/** @param {string} from */
 function coreEmail(from) {
   try {
     return execFileSync('git', ['config', '--local', 'user.email'], { cwd: from, encoding: 'utf8' }).trim() || null;
@@ -118,7 +127,9 @@ function coreEmail(from) {
   }
 }
 
+/** @param {string[]} argv */
 function cli(argv) {
+  /** @type {{ git: boolean, id?: string, name?: string }} */
   const args = { git: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -140,7 +151,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     cli(process.argv.slice(2));
   } catch (err) {
-    console.error(err.message);
+    console.error(/** @type {Error} */ (err).message);
     process.exit(1);
   }
 }

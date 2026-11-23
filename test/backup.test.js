@@ -51,6 +51,7 @@ test('parseImport keeps events with a sound envelope even if this version can\'t
 });
 
 test('parseImport hands other files to the app\'s recognize hook', () => {
+  /** @param {any} data */
   const recognize = (data) => (Array.isArray(data?.stops) ? { kind: 'trip', trip: data } : null);
   const parsed = parseImport(JSON.stringify({ stops: ['Lisbon'] }), { format: FORMAT, recognize });
   assert.deepEqual(parsed, { kind: 'trip', trip: { stops: ['Lisbon'] } });

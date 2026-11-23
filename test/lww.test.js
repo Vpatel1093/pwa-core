@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isNewer, keepNewest } from '../app/core/lww.js';
 
+/** @param {number} ts */
 const ev = (ts, device_id = 'd1', id = `e${ts}`) => ({ id, ts, device_id });
 
 test('isNewer orders by ts, then device id, then event id', () => {

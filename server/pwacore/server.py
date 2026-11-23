@@ -46,7 +46,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-VERSION = "0.1.0"  # core version; matches app/core/version.js (a test checks)
+VERSION = "0.1.1"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
 DEFAULT_STATIC = ROOT / "app"

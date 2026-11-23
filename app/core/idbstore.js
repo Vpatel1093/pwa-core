@@ -3,8 +3,15 @@
 //   outbox  keyPath id    ids of local events not yet pushed
 //   meta    out-of-line   device id, clock, cursor, settings
 
+/** @typedef {import('./events.js').PwaEvent} PwaEvent */
+
 const DB_VERSION = 1;
 
+/**
+ * @template T
+ * @param {IDBRequest<T>} req
+ * @returns {Promise<T>}
+ */
 function promisify(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
@@ -12,6 +19,7 @@ function promisify(req) {
   });
 }
 
+/** @param {IDBTransaction} tx @returns {Promise<void>} */
 function done(tx) {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -20,6 +28,7 @@ function done(tx) {
   });
 }
 
+/** @param {string} name */
 async function openDb(name) {
   const open = indexedDB.open(name, DB_VERSION);
   open.onupgradeneeded = () => {
@@ -35,9 +44,15 @@ async function openDb(name) {
 // is a new, empty database.
 // onVersionChange: another tab wants a newer schema; this tab's connection
 // is closed and the page should reload.
+/**
+ * @param {string} name
+ * @param {{ onVersionChange?: () => void }} [opts]
+ * @returns {Promise<import('./memstore.js').Store>}
+ */
 export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
   if (typeof name !== 'string' || !name) throw new Error('openIdbStore needs a database name');
-  let db = null;
+  /** @type {IDBDatabase} */
+  let db;
   let closed = true;
 
   async function connect() {
@@ -53,12 +68,13 @@ export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
 
   // Start a transaction, reconnecting once if the connection was lost.
   // (Awaiting here is fine: no transaction is open yet.)
+  /** @param {string | string[]} stores @param {IDBTransactionMode} [mode] */
   async function txn(stores, mode = 'readonly') {
     if (closed) await connect();
     try {
       return db.transaction(stores, mode);
     } catch (err) {
-      if (err.name !== 'InvalidStateError') throw err;
+      if (/** @type {Error} */ (err).name !== 'InvalidStateError') throw err;
       await connect();
       return db.transaction(stores, mode);
     }
@@ -84,13 +100,15 @@ export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
       const tx = await txn(['events', 'outbox'], 'readwrite');
       const events = tx.objectStore('events');
       const outbox = tx.objectStore('outbox');
+      /** @type {PwaEvent[]} */
       const added = [];
       const seen = new Set();
       for (const e of list) {
         if (seen.has(e.id)) continue;
         seen.add(e.id);
-        events.count(e.id).onsuccess = (ev) => {
-          if (ev.target.result > 0) return;
+        const count = events.count(e.id);
+        count.onsuccess = () => {
+          if (count.result > 0) return;
           events.add(e);
           if (local) outbox.put({ id: e.id });
           added.push(e);
@@ -105,11 +123,14 @@ export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
       const tx = await txn(['outbox', 'events'], 'readwrite');
       const events = tx.objectStore('events');
       const outbox = tx.objectStore('outbox');
+      /** @type {PwaEvent[]} */
       const out = [];
-      outbox.getAllKeys(null, Number.isFinite(limit) ? limit : undefined).onsuccess = (ev) => {
-        for (const id of ev.target.result) {
-          events.get(id).onsuccess = (g) => {
-            if (g.target.result) out.push(g.target.result);
+      const keys = outbox.getAllKeys(null, Number.isFinite(limit) ? limit : undefined);
+      keys.onsuccess = () => {
+        for (const id of keys.result) {
+          const got = events.get(id);
+          got.onsuccess = () => {
+            if (got.result) out.push(got.result);
             else outbox.delete(id); // no event behind it; drop so it can't stall pushes
           };
         }
@@ -129,8 +150,9 @@ export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
     async requeueAll() {
       const tx = await txn(['events', 'outbox'], 'readwrite');
       const outbox = tx.objectStore('outbox');
-      tx.objectStore('events').getAllKeys().onsuccess = (ev) => {
-        for (const id of ev.target.result) outbox.put({ id });
+      const keys = tx.objectStore('events').getAllKeys();
+      keys.onsuccess = () => {
+        for (const id of keys.result) outbox.put({ id });
       };
       await done(tx);
     },

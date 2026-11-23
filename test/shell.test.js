@@ -12,6 +12,7 @@ import { MAX_ID_LEN, MAX_EVENT_BYTES } from '../app/core/events.js';
 const APP = new URL('../app/', import.meta.url).pathname;
 const sw = readFileSync(join(APP, 'sw.js'), 'utf8');
 
+/** @param {string} dir @returns {string[]} */
 function walk(dir) {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
@@ -21,21 +22,21 @@ function walk(dir) {
 
 test('service worker version matches the app version', () => {
   const m = /const VERSION = '([^']+)'/.exec(sw);
-  assert.equal(m[1], APP_VERSION);
+  assert.equal(m?.[1], APP_VERSION);
 });
 
 test('service worker storage id matches the app', () => {
-  assert.equal(/const APP_ID = '([^']+)'/.exec(sw)[1], APP_ID);
+  assert.equal(/const APP_ID = '([^']+)'/.exec(sw)?.[1], APP_ID);
 });
 
 test('server version matches the core version', () => {
   const py = readFileSync(new URL('../server/pwacore/server.py', import.meta.url), 'utf8');
-  assert.equal(/^VERSION = "([^"]+)"/m.exec(py)[1], CORE_VERSION);
+  assert.equal(/^VERSION = "([^"]+)"/m.exec(py)?.[1], CORE_VERSION);
 });
 
 test("the app's server launcher reports the app version", () => {
   const py = readFileSync(new URL('../server/server.py', import.meta.url), 'utf8');
-  assert.equal(/^APP_VERSION = "([^"]+)"/m.exec(py)[1], APP_VERSION);
+  assert.equal(/^APP_VERSION = "([^"]+)"/m.exec(py)?.[1], APP_VERSION);
 });
 
 test('storage id is a safe, stable name', () => {
@@ -47,15 +48,17 @@ test('manifest and page use the app name and storage id', () => {
   assert.equal(manifest.id, APP_ID, 'an explicit id keeps installs the same app if start_url moves');
   assert.equal(manifest.name, APP_NAME);
   const html = readFileSync(join(APP, 'index.html'), 'utf8');
-  const text = (s) => s.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-  assert.equal(text(/<title>([^<]*)<\/title>/.exec(html)[1]), APP_NAME);
-  assert.equal(text(/name="apple-mobile-web-app-title" content="([^"]*)"/.exec(html)[1]), APP_NAME);
+  /** @param {string | undefined} s */
+  const text = (s) => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  assert.equal(text(/<title>([^<]*)<\/title>/.exec(html)?.[1]), APP_NAME);
+  assert.equal(text(/name="apple-mobile-web-app-title" content="([^"]*)"/.exec(html)?.[1]), APP_NAME);
 });
 
 test('client and server agree on event limits', () => {
   const py = readFileSync(new URL('../server/pwacore/server.py', import.meta.url), 'utf8');
+  /** @param {string} name */
   const num = (name) => {
-    const expr = new RegExp(`^${name} = ([0-9* ]+)`, 'm').exec(py)[1];
+    const expr = String(new RegExp(`^${name} = ([0-9* ]+)`, 'm').exec(py)?.[1]);
     return expr.split('*').reduce((a, b) => a * Number(b.trim()), 1);
   };
   assert.equal(num('MAX_ID_LEN'), MAX_ID_LEN);

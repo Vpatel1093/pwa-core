@@ -27,7 +27,7 @@ const info = {
     rejected: [{ id: note.id, reason: 'too large' }],
   },
   sync: { status: 'error', error: 'HTTP 500: server error' },
-  extra: [['Trips', 1], ['Settings', 'compact']],
+  extra: /** @type {[string, unknown][]} */ ([['Trips', 1], ['Settings', 'compact']]),
   userAgent: 'TestBrowser/1.0',
   tz: 'America/Chicago',
 };
@@ -58,7 +58,7 @@ test('diagnostics add the app\'s own lines', () => {
 
 test('diagnostics never include event content or scope ids', () => {
   const text = diagnosticsText(info);
-  for (const secret of ['Secret trip', 'Private note', made.scope_id]) {
+  for (const secret of ['Secret trip', 'Private note', /** @type {string} */ (made.scope_id)]) {
     assert.ok(!text.includes(secret), `leaked ${secret}`);
   }
 });

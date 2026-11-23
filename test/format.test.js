@@ -16,6 +16,7 @@ test('ago: coarse, human, never negative', () => {
 test('syncLabel: what the header says about sync', () => {
   const now = 10 * 86400_000;
   const base = { status: 'idle', lastSyncAt: now - 2 * 3600_000, pending: 0, error: null, manual: false };
+  /** @param {Partial<Parameters<typeof syncLabel>[0]>} s */
   const label = (s) => syncLabel({ ...base, ...s }, now);
   assert.equal(label({ manual: true, status: 'offline' }).text, 'Syncing…');
   assert.equal(label({}).text, 'Synced 2h ago');

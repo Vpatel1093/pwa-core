@@ -18,6 +18,7 @@ test('findImports lists static, re-export and dynamic imports', () => {
   assert.deepEqual(findImports(src), ['./a.js', './side.js', '../core/b.js', './c.js', './d.js', 'https://example.com/x.js']);
 });
 
+/** @param {Record<string, string>} files */
 function fixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'pwacore-build-'));
   for (const [path, text] of Object.entries(files)) {

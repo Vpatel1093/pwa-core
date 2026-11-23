@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkLock } from '../tools/pwacore/lock.mjs';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import { newApp } from '../tools/new-app.mjs';
 
 const CORE = fileURLToPath(new URL('..', import.meta.url));
 
+/** @param {import('node:test').TestContext} t */
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'pwacore-new-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -19,6 +20,7 @@ function scratch(t) {
 test('newApp copies the core and sets the name and storage id everywhere', (t) => {
   const to = join(scratch(t), 'trips');
   newApp({ from: CORE, to, id: 'trips', name: 'Trips "beta" & co' });
+  /** @param {string} f */
   const read = (f) => readFileSync(join(to, f), 'utf8');
   assert.match(read('app/js/config.js'), /APP_ID = 'trips';/);
   assert.match(read('app/js/config.js'), /APP_NAME = "Trips \\"beta\\" & co";/);
@@ -39,6 +41,29 @@ test('newApp copies the core and sets the name and storage id everywhere', (t) =
   const { NODE_TEST_CONTEXT, ...env } = process.env;
   const out = execFileSync(process.execPath, ['--test', '--test-reporter=tap', 'test/shell.test.js'], { cwd: to, encoding: 'utf8', env });
   assert.match(out, /# fail 0/);
+});
+
+test('a new app starts with the type check: its configs, the script and pinned TypeScript', (t) => {
+  const to = join(scratch(t), 'typed');
+  newApp({ from: CORE, to, id: 'typed', name: 'Typed' });
+  /** @param {string} root */
+  const pkgOf = (root) => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const core = pkgOf(CORE);
+  const pkg = pkgOf(to);
+  assert.equal(pkg.scripts.typecheck, core.scripts.typecheck);
+  assert.match(pkg.scripts.check, /npm run typecheck/, 'npm run check runs the type check');
+  for (const dep of ['typescript', '@types/node']) {
+    assert.match(core.devDependencies[dep] ?? '', /^\d+\.\d+\.\d+$/, `${dep} is pinned to an exact version`);
+    assert.equal(pkg.devDependencies[dep], core.devDependencies[dep]);
+  }
+  for (const f of ['tsconfig.json', 'tsconfig.sw.json']) assert.ok(existsSync(join(to, f)), `${f} comes along`);
+  // The renamed copy type-checks. It borrows the core's node_modules; the
+  // app gets its own with npm install.
+  symlinkSync(join(CORE, 'node_modules'), join(to, 'node_modules'), 'dir');
+  const tsc = join(CORE, 'node_modules/typescript/bin/tsc');
+  for (const config of ['tsconfig.json', 'tsconfig.sw.json']) {
+    execFileSync(process.execPath, [tsc, '-p', join(to, config)], { cwd: to, encoding: 'utf8' });
+  }
 });
 
 test('newApp leaves out local, generated and private files', (t) => {

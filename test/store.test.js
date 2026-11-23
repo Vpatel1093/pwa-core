@@ -10,21 +10,29 @@ import { openIdbStore } from '../app/core/idbstore.js';
 
 // idbstore uses the global, as in a browser. Record every connection it
 // opens so tests can close them underneath it.
+/** @type {IDBDatabase[]} */
 const connections = [];
-globalThis.indexedDB = {
-  open(...args) {
-    const req = fakeIndexedDB.open(...args);
+const lastConnection = () => /** @type {IDBDatabase} */ (connections.at(-1));
+// Only open is faked: it is all idbstore calls.
+globalThis.indexedDB = /** @type {IDBFactory} */ (/** @type {unknown} */ ({
+  /** @param {string} name @param {number} [version] */
+  open(name, version) {
+    const req = fakeIndexedDB.open(name, version);
     req.addEventListener('success', () => connections.push(req.result));
     return req;
   },
-};
+}));
 
 let dbCount = 0;
+/** @param {{ onVersionChange?: () => void }} [opts] */
 const freshIdb = (opts) => openIdbStore(`test-${++dbCount}`, opts);
 
+/** @param {string} id @returns {import('../app/core/events.js').PwaEvent} */
 const e = (id) => ({ id, v: 1, type: 'x', scope_id: 's', ts: 1, device_id: 'd', data: {} });
+/** @param {{ id: string }[]} list */
 const ids = (list) => list.map((x) => x.id).sort();
 
+/** @param {string} name @param {() => import('../app/core/memstore.js').Store | Promise<import('../app/core/memstore.js').Store>} makeStore */
 function contract(name, makeStore) {
   describe(`${name} store`, () => {
     test('addEvents returns only the new ones and keeps the first copy', async () => {
@@ -100,7 +108,8 @@ describe('indexeddb store only', () => {
   test('reconnects after the browser drops the connection', async () => {
     const s = await freshIdb();
     await s.addEvents([e('a')], { local: true });
-    forceCloseDatabase(connections.at(-1)); // like iOS closing it in the background
+    // @ts-expect-error: fake-indexeddb types the argument as the FDBDatabase class, but it takes an open connection
+    forceCloseDatabase(lastConnection()); // like iOS closing it in the background
     await s.addEvents([e('b')], { local: true });
     assert.deepEqual(ids(await s.allEvents()), ['a', 'b']);
     assert.equal(await s.outboxCount(), 2);
@@ -109,7 +118,7 @@ describe('indexeddb store only', () => {
   test('reconnects when a closed connection throws InvalidStateError', async () => {
     const s = await freshIdb();
     await s.setMeta('k', 1);
-    connections.at(-1).close(); // closed without a close event
+    lastConnection().close(); // closed without a close event
     assert.equal(await s.getMeta('k'), 1);
   });
 
@@ -118,7 +127,7 @@ describe('indexeddb store only', () => {
     const s = await openIdbStore(name);
     await s.addEvents([e('a')], { local: true });
     // Write an orphan straight into the outbox, as a half-finished old write could.
-    const db = connections.at(-1);
+    const db = lastConnection();
     await new Promise((resolve, reject) => {
       const tx = db.transaction('outbox', 'readwrite');
       tx.objectStore('outbox').put({ id: 'ghost' });
@@ -134,7 +143,7 @@ describe('indexeddb store only', () => {
     const name = `test-${++dbCount}`;
     let told = 0;
     await openIdbStore(name, { onVersionChange: () => told++ });
-    await new Promise((resolve, reject) => {
+    await new Promise((/** @type {(v?: unknown) => void} */ resolve, reject) => {
       const req = fakeIndexedDB.open(name, 2);
       req.onsuccess = () => { req.result.close(); resolve(); };
       req.onerror = () => reject(req.error);
@@ -144,5 +153,6 @@ describe('indexeddb store only', () => {
 });
 
 test('openIdbStore needs the app\'s storage id', async () => {
+  // @ts-expect-error: the test calls it without a name on purpose
   await assert.rejects(openIdbStore(), /name/);
 });

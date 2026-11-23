@@ -7,6 +7,9 @@
 // every device's clock into the future for good.
 export const MAX_SKEW_MS = 24 * 60 * 60 * 1000;
 
+/** @typedef {{ readonly last: number, tick(): number, observe(ts: unknown): void }} Clock */
+
+/** @param {{ now?: () => number, last?: number }} [opts] @returns {Clock} */
 export function createClock({ now = () => Date.now(), last = 0 } = {}) {
   if (!Number.isSafeInteger(last) || last > now() + MAX_SKEW_MS) last = 0;
   return {
@@ -18,7 +21,7 @@ export function createClock({ now = () => Date.now(), last = 0 } = {}) {
       return last;
     },
     observe(ts) {
-      if (Number.isSafeInteger(ts) && ts > last && ts <= now() + MAX_SKEW_MS) last = ts;
+      if (typeof ts === 'number' && Number.isSafeInteger(ts) && ts > last && ts <= now() + MAX_SKEW_MS) last = ts;
     },
   };
 }

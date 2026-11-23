@@ -1,5 +1,6 @@
 // Small display helpers.
 
+/** @param {number | null | undefined} then */
 export function ago(then, now = Date.now()) {
   if (then == null) return 'never';
   const s = Math.max(0, (now - then) / 1000);
@@ -14,6 +15,7 @@ export const STALE_SYNC_MS = 24 * 60 * 60 * 1000;
 
 // The header's sync button: short text, whether to show the quiet "waiting a
 // while" cue, and a fuller label for screen readers (the cue is visual).
+/** @param {{ manual?: boolean, status?: string, pending: number, lastSyncAt?: number | null }} s */
 export function syncLabel(s, now = Date.now()) {
   let text;
   if (s.manual) text = 'Syncing…';
