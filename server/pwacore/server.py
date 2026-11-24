@@ -56,6 +56,7 @@ MAX_EVENT_BYTES = 64 * 1024  # matches app/core/events.js
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_ID_LEN = 100
 MAX_TS = 2**53 - 1  # largest integer JavaScript represents exactly
+MAX_DEPTH = 32  # objects and arrays deep, the event itself is 1; matches app/core/events.js
 MAX_CURSOR = 2**63 - 1  # SQLite INTEGER range
 DEFAULT_PAGE = 500
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -214,6 +215,19 @@ def check_batch(body):
     return None
 
 
+def too_deep(root):
+    """True if root nests more than MAX_DEPTH objects and arrays deep. A loop,
+    not recursion, so any depth gets an answer."""
+    todo = [(root, 1)]
+    while todo:
+        v, depth = todo.pop()
+        if isinstance(v, (dict, list)):
+            if depth > MAX_DEPTH:
+                return True
+            todo.extend((x, depth + 1) for x in (v.values() if isinstance(v, dict) else v))
+    return False
+
+
 def check_event(e):
     """Return None if the event can be stored, else a short reason."""
     if not isinstance(e, dict):
@@ -225,6 +239,10 @@ def check_event(e):
     ts = e.get("ts")
     if type(ts) is not int or not 0 <= ts <= MAX_TS:
         return "ts must be an integer from 0 to 2^53-1"
+    # Clients skip deeper events (app/core/events.js MAX_DEPTH), so storing
+    # one would only waste it; and json.dumps below recurses.
+    if too_deep(e):
+        return "nested too deep"
     try:
         size = len(to_json(e).encode())
     except ValueError:

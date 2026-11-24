@@ -2,7 +2,7 @@
 // so merging is just "add what we don't have yet" (dedupe by id); state.js
 // makes the result the same on every device.
 
-import { validateEnvelope, maxTs, eventBytes } from './events.js';
+import { validateEnvelope, eventBytes } from './events.js';
 
 const PUSH_BATCH = 200; // events per push; the server takes up to 1000
 const PUSH_BYTES = 1024 * 1024; // the server takes bodies up to 2MB
@@ -136,7 +136,7 @@ export function createSync({
         else skipped++;
       }
       const added = await store.addEvents(valid);
-      clock.observe(maxTs(valid));
+      for (const e of valid) clock.observe(e.ts); // each one: a page max past the skew limit would hide the rest
       pulled.push(...added);
       received.push(...valid);
       after = page.next;

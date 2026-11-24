@@ -367,3 +367,28 @@ test('a device of the right app syncs, and every request names the app', async (
   assert.equal(srv.rows.length, 1);
   assert.ok(urls.length >= 2 && urls.every((u) => new URL(u, 'http://x').searchParams.get('app') === 'trips'), urls.join(' '));
 });
+
+test('a deeply nested event on the server is skipped, and the events after it still arrive', async () => {
+  const srv = fakeServer();
+  const a = device('a', srv);
+  const b = device('b', srv);
+  /** @type {any} */
+  let deep = {};
+  for (let i = 0; i < 1000; i++) deep = { x: deep }; // events.test.js covers 20000 (structuredClone here can't)
+  srv.rows.push(/** @type {PwaEvent} */ ({ id: 'deep', v: 1, type: 't', ts: 1, device_id: 'evil', data: deep }));
+  await a.tick('k');
+  await a.sync.syncOnce();
+  const r = await b.sync.syncOnce();
+  assert.equal(r.skipped, 1);
+  assert.ok(isOn(buildFlags(await b.store.allEvents()), 'k'));
+});
+
+test('the clock follows every pulled event within the skew limit, even when the page holds one past it', async () => {
+  const srv = fakeServer();
+  const b = device('b', srv);
+  const hour = 60 * 60 * 1000;
+  const base = { v: 1, type: 'flag.set', device_id: 'far', data: { key: 'k', on: true } };
+  srv.rows.push(/** @type {PwaEvent} */ ({ ...base, id: 'near', ts: 1000 + hour }), /** @type {PwaEvent} */ ({ ...base, id: 'far', ts: 1000 + 30 * hour }));
+  await b.sync.syncOnce();
+  assert.equal(b.clock.last, 1000 + hour, 'an edit made now is stamped after the event an hour ahead');
+});

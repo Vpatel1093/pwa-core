@@ -266,6 +266,17 @@ class AppIdTest(unittest.TestCase):
 
 
 class ValidationTest(unittest.TestCase):
+    def test_rejects_an_event_nested_too_deep(self):
+        def nested(depth):
+            inner = {}
+            for i in range(2, depth):
+                inner = [inner] if i < depth - 1 and i % 2 else {"x": inner}
+            return dict(ev(1), data=inner)
+
+        self.assertIsNone(server.check_event(nested(server.MAX_DEPTH)))
+        self.assertEqual(server.check_event(nested(server.MAX_DEPTH + 1)), "nested too deep")
+        self.assertEqual(server.check_event(nested(20000)), "nested too deep")
+
     def test_accepts_a_good_batch(self):
         self.assertIsNone(server.check_batch({"events": [ev(1), ev(2)]}))
         self.assertIsNone(server.check_event(ev(1)))

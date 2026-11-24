@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClock } from '../app/core/clock.js';
 import {
-  makeEvent, validateEnvelope, createEventChecks, maxTs, MAX_EVENT_BYTES,
+  makeEvent, validateEnvelope, createEventChecks, maxTs, MAX_EVENT_BYTES, MAX_DEPTH,
 } from '../app/core/events.js';
 import { uuidv7Time } from '../app/core/uuid.js';
 
@@ -166,4 +166,27 @@ test('createEventChecks turns a throwing body check into a reason', () => {
 test('maxTs finds the newest timestamp or 0', () => {
   assert.equal(maxTs([]), 0);
   assert.equal(maxTs([{ ts: 3 }, { ts: 9 }, { ts: 4 }]), 9);
+});
+
+// data nested so the whole event is `depth` containers deep (the event is 1, data is 2).
+/** @param {number} depth */
+function nested(depth) {
+  /** @type {any} */
+  let inner = {};
+  // One level per step, some of them arrays; the outermost (data) stays an object.
+  for (let i = 2; i < depth; i++) inner = i < depth - 1 && i % 2 ? [inner] : { x: inner };
+  return { id: 'e1', v: 1, type: 't', ts: 1, device_id: 'd1', data: inner };
+}
+
+test('a deeply nested event gets a reason, not a stack overflow, so sync can skip it', () => {
+  assert.equal(validateEnvelope(nested(MAX_DEPTH)), null);
+  assert.equal(validateEnvelope(nested(MAX_DEPTH + 1)), 'depth');
+  assert.equal(validateEnvelope(nested(20000)), 'depth');
+  assert.equal(createEventChecks()(nested(20000)), 'depth');
+});
+
+test('a lone surrogate deep inside still counts', () => {
+  const e = nested(MAX_DEPTH - 1);
+  e.data.bad = ['ok', { ['\uD800']: 1 }];
+  assert.equal(validateEnvelope(e), 'text');
 });

@@ -57,14 +57,33 @@ const isId = (v) => isNonEmptyString(v) && v.length <= MAX_ID_LEN;
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-// A lone surrogate (half an emoji) survives JSON in JS but can't be stored
-// as UTF-8, so the server refuses it.
-/** @param {unknown} v @returns {boolean} */
-function hasLoneSurrogate(v) {
-  if (typeof v === 'string') return LONE_SURROGATE.test(v);
-  if (Array.isArray(v)) return v.some(hasLoneSurrogate);
-  if (v && typeof v === 'object') return Object.entries(v).some(([k, x]) => LONE_SURROGATE.test(k) || hasLoneSurrogate(x));
-  return false;
+// How many objects and arrays deep an event may go (the event itself is 1,
+// data is 2). The server has the same limit.
+export const MAX_DEPTH = 32;
+
+// 'depth' if the event nests too deep, 'text' if it holds a lone surrogate
+// (half an emoji: it survives JSON in JS but can't be stored as UTF-8, so the
+// server refuses it), else null. A loop, not recursion: a deeply nested event
+// from the server must get a reason (sync skips it), not a stack overflow
+// that stops every pull at that page.
+/** @param {unknown} root @returns {'depth' | 'text' | null} */
+function checkShape(root) {
+  /** @type {[unknown, number][]} */
+  const todo = [[root, 1]];
+  while (todo.length) {
+    const [v, depth] = /** @type {[unknown, number]} */ (todo.pop());
+    if (typeof v === 'string') {
+      if (LONE_SURROGATE.test(v)) return 'text';
+    } else if (v !== null && typeof v === 'object') {
+      if (depth > MAX_DEPTH) return 'depth';
+      const isArray = Array.isArray(v);
+      for (const [k, x] of Object.entries(v)) {
+        if (!isArray && LONE_SURROGATE.test(k)) return 'text';
+        todo.push([x, depth + 1]);
+      }
+    }
+  }
+  return null;
 }
 
 /** @param {unknown} e */
@@ -114,7 +133,8 @@ export function validateEnvelope(e) {
   if (!Number.isSafeInteger(e.ts) || e.ts < 0) return 'ts';
   if (!isId(e.device_id)) return 'device_id';
   if (!isPlainObject(e.data)) return 'data';
-  if (hasLoneSurrogate(e)) return 'text';
+  const shape = checkShape(e);
+  if (shape !== null) return shape;
   if (eventBytes(e) > MAX_EVENT_BYTES) return 'size';
   return null;
 }

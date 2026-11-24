@@ -7,7 +7,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { APP_NAME, APP_ID, APP_VERSION } from '../app/js/config.js';
 import { CORE_VERSION } from '../app/core/version.js';
-import { MAX_ID_LEN, MAX_EVENT_BYTES } from '../app/core/events.js';
+import { MAX_ID_LEN, MAX_EVENT_BYTES, MAX_DEPTH } from '../app/core/events.js';
 
 const APP = new URL('../app/', import.meta.url).pathname;
 const sw = readFileSync(join(APP, 'sw.js'), 'utf8');
@@ -69,6 +69,7 @@ test('client and server agree on event limits', () => {
   };
   assert.equal(num('MAX_ID_LEN'), MAX_ID_LEN);
   assert.equal(num('MAX_EVENT_BYTES'), MAX_EVENT_BYTES);
+  assert.equal(num('MAX_DEPTH'), MAX_DEPTH);
 });
 
 test('service worker caches every app file', () => {
