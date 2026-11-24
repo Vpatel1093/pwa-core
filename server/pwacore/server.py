@@ -327,6 +327,9 @@ def check_event(e):
     return None
 
 
+REPLIED = object()  # read_json_body already sent the reply (an error)
+
+
 class Handler(SimpleHTTPRequestHandler):
     server_version = "pwa-core"
     sys_version = ""
@@ -423,6 +426,43 @@ class Handler(SimpleHTTPRequestHandler):
         )
         return True
 
+    def read_json_body(self, url):
+        """Read a POST's JSON body, or send the error and return REPLIED. The
+        body is read before any refusal is sent, so the connection stays usable."""
+        header = self.headers.get("Content-Length")
+        if header is None:
+            self.close_connection = True
+            self.send_json(HTTPStatus.LENGTH_REQUIRED, {"error": "Content-Length required"})
+            return REPLIED
+        if not (header.strip().isascii() and header.strip().isdigit()):
+            self.close_connection = True
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
+            return REPLIED
+        length = int(header)
+        if length > MAX_BODY_BYTES:
+            # Drain a bounded amount so the client sees the 413, not a reset.
+            remaining = min(length, 8 * MAX_BODY_BYTES)
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self.close_connection = True
+            self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
+            return REPLIED
+        raw = self.rfile.read(length)
+        if self.refuse_other_app(url.query):
+            return REPLIED
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "use application/json"})
+            return REPLIED
+        try:
+            return parse_json(raw)
+        except ValueError:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
+            return REPLIED
+
     def do_GET(self):
         if self.refuse_foreign():
             return
@@ -463,34 +503,9 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path != "/api/events":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-        header = self.headers.get("Content-Length")
-        if header is None:
-            self.close_connection = True
-            return self.send_json(HTTPStatus.LENGTH_REQUIRED, {"error": "Content-Length required"})
-        if not (header.strip().isascii() and header.strip().isdigit()):
-            self.close_connection = True
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
-        length = int(header)
-        if length > MAX_BODY_BYTES:
-            # Drain a bounded amount so the client sees the 413, not a reset.
-            remaining = min(length, 8 * MAX_BODY_BYTES)
-            while remaining > 0:
-                chunk = self.rfile.read(min(remaining, 65536))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-            self.close_connection = True
-            return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
-        raw = self.rfile.read(length)
-        if self.refuse_other_app(url.query):
+        body = self.read_json_body(url)
+        if body is REPLIED:
             return
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
-            return self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "use application/json"})
-        try:
-            body = parse_json(raw)
-        except ValueError:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
         problem = check_batch(body)
         if problem:
             return self.send_json(HTTPStatus.BAD_REQUEST, {"error": problem})
