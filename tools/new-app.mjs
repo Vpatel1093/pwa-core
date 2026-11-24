@@ -150,7 +150,16 @@ export function newApp({ from, to, id, name, git = false, email = null, port, se
   to = resolve(to);
   if (existsSync(to) && readdirSync(to).length) throw new Error(`${to} is not empty.`);
   if (to === from || to.startsWith(from + sep)) throw new Error('The new app must live outside the core folder.');
-  const claims = claimedPorts({ parent: dirname(to), self: to, serveStatus });
+  /** @type {Set<number>} */
+  let claims;
+  try {
+    claims = claimedPorts({ parent: dirname(to), self: to, serveStatus });
+  } catch (err) {
+    if (port === undefined) throw err;
+    // A given port is still checked against the other apps' PORT lines.
+    console.warn(`${/** @type {Error} */ (err).message}: checking ${port} against the other apps only.`);
+    claims = claimedPorts({ parent: dirname(to), self: to, serveStatus: () => null });
+  }
   if (port !== undefined && claims.has(port)) throw new Error(`Port ${port} is taken (another app's PORT line or tailscale serve). Pick another, or leave out --port.`);
   port ??= pickPort(claims);
 

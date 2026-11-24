@@ -226,11 +226,29 @@ test('without --port, newApp takes the lowest port from 8765 up that no app or t
   put(join(base, 'old'), { 'core.lock.json': '{}\n', 'server/server.py': 'from pwacore.server import main\n' }); // no PORT line: 8765
   put(join(base, 'second'), { 'core.lock.json': '{}\n', 'server/server.py': 'PORT = 8766  # set by new-app\n' });
   put(join(base, 'not-an-app'), { 'server/server.py': 'PORT = 8769\n' }); // no core.lock.json: no claim
-  put(join(base, 'no-launcher'), { 'core.lock.json': '{}\n' }); // an app without a launcher claims 8765 too
   const serve = JSON.stringify({ TCP: { 8767: { HTTPS: true } }, Web: { 'm.t.ts.net:8767': { Handlers: { '/': { Proxy: 'http://127.0.0.1:8768' } } } } });
   const to = join(base, 'next');
   newApp({ from: CORE, to, id: 'next', name: 'Next', serveStatus: () => serve });
   assert.match(readFileSync(join(to, 'server/server.py'), 'utf8'), /^PORT = 8769\b/m);
+});
+
+test('an app with no PORT line, or no launcher at all, claims 8765', (t) => {
+  /** @type {Record<string, string>[]} */
+  const launchers = [{ 'server/server.py': 'from pwacore.server import main\n' }, {}];
+  for (const files of launchers) {
+    const base = scratch(t);
+    put(join(base, 'old'), { 'core.lock.json': '{}\n', ...files });
+    assert.deepEqual([...claimedPorts({ parent: base, serveStatus: noServe })], [8765], JSON.stringify(files));
+  }
+});
+
+test('unreadable serve status stops new-app only when it has to pick the port', (t) => {
+  const base = scratch(t);
+  const garbled = () => 'Warning: client version differs\n{';
+  assert.throws(() => newApp({ from: CORE, to: join(base, 'pick'), id: 'pick', name: 'Pick', serveStatus: garbled }), /--port/);
+  const to = join(base, 'given');
+  newApp({ from: CORE, to, id: 'given', name: 'Given', port: 9125, serveStatus: garbled });
+  assert.match(readFileSync(join(to, 'server/server.py'), 'utf8'), /^PORT = 9125\b/m);
 });
 
 test('claimedPorts reads launchers and serve status, and ignores the folder being made', (t) => {
@@ -238,7 +256,7 @@ test('claimedPorts reads launchers and serve status, and ignores the folder bein
   put(join(base, 'a'), { 'core.lock.json': '{}\n', 'server/server.py': '"""x"""\nPORT = 8800\n' });
   put(join(base, 'b'), { 'core.lock.json': '{}\n', 'server/server.py': 'PORT = 8801\n' });
   const claims = claimedPorts({ parent: base, self: join(base, 'b'), serveStatus: () => JSON.stringify({ TCP: { 443: { HTTPS: true } } }) });
-  assert.deepEqual([...claims].sort(), [443, 8800]);
+  assert.deepEqual([...claims].sort((a, b) => a - b), [443, 8800]);
 });
 
 test('parseServeStatus finds every port in tailscale serve status --json', () => {
