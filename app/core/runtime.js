@@ -143,16 +143,25 @@ export async function startRuntime({
       status.manual = true;
       tell();
     }
-    try {
-      const r = await sync.syncOnce();
-      await saveClock();
+    /** @param {import('./sync.js').Received} r */
+    const deliver = (r) => {
       // received, not pulled: another tab may have stored some of them first.
       if (r.received.length) onEvents(r.received, 'sync');
       if (r.pulled.length) channel?.postMessage(r.pulled);
+    };
+    try {
+      const r = await sync.syncOnce();
+      await saveClock();
+      deliver(r);
       if (r.pushError) throw r.pushError;
       status.status = 'ok';
       status.error = null;
     } catch (err) {
+      const partial = /** @type {{ partial?: import('./sync.js').Received } | null} */ (err)?.partial;
+      if (partial) {
+        await saveClock();
+        deliver(partial);
+      }
       // No response at all means we're away from the server; anything else
       // is a real problem worth telling apart.
       const message = /** @type {Error | undefined} */ (err)?.message;

@@ -18,6 +18,8 @@ const MAX_REJECTED_KEPT = 100;
 /**
  * pulled: new to this device. received: every valid event the server sent.
  * @typedef {{ pushed: number, pulled: PwaEvent[], received: PwaEvent[], skipped: number, pushError: unknown }} SyncResult
+ * @typedef {{ pulled: PwaEvent[], received: PwaEvent[] }} Received
+ * A pull that fails partway throws an error whose `partial` is the Received so far.
  */
 
 /**
@@ -105,11 +107,10 @@ export function createSync({
     }
   }
 
-  async function pull() {
-    /** @type {PwaEvent[]} */
-    const pulled = []; // new to this device
-    /** @type {PwaEvent[]} */
-    const received = []; // every valid event seen (another tab may have stored some already)
+  // Adds to seen as each page is stored, so a later page that fails still
+  // leaves the caller a list of what is in the store now.
+  /** @param {Received} seen @returns {Promise<{ skipped: number, restarted: boolean }>} */
+  async function pull({ pulled, received }) {
     let skipped = 0;
     let after = await store.getMeta('pullCursor', 0);
     const knownServer = await store.getMeta('serverId', null);
@@ -126,7 +127,7 @@ export function createSync({
         await store.requeueAll();
         await store.setMeta('pullCursor', 0);
         if (page.server_id) await store.setMeta('serverId', page.server_id);
-        return { pulled, received, skipped, restarted: true };
+        return { skipped, restarted: true };
       }
       if (page.server_id && knownServer === null) await store.setMeta('serverId', page.server_id);
       /** @type {PwaEvent[]} */
@@ -141,7 +142,7 @@ export function createSync({
       received.push(...valid);
       after = page.next;
       await store.setMeta('pullCursor', after);
-      if (!page.more) return { pulled, received, skipped, restarted: false };
+      if (!page.more) return { skipped, restarted: false };
     }
   }
 
@@ -156,20 +157,26 @@ export function createSync({
     } catch (err) {
       pushError = err;
     }
-    /** @type {{ pulled: PwaEvent[], received: PwaEvent[], skipped: number, restarted?: boolean }} */
-    let result = await pull();
-    if (result.restarted) {
-      // Server was replaced: push everything we have, then pull from the start.
-      if (!pushError) pushed += await push();
-      const again = await pull();
-      result = {
-        pulled: [...result.pulled, ...again.pulled],
-        received: [...result.received, ...again.received],
-        skipped: result.skipped + again.skipped,
-      };
+    /** @type {Received} */
+    const seen = { pulled: [], received: [] };
+    /** @type {number} */
+    let skipped;
+    try {
+      const first = await pull(seen);
+      skipped = first.skipped;
+      if (first.restarted) {
+        // Server was replaced: push everything we have, then pull from the start.
+        if (!pushError) pushed += await push();
+        skipped += (await pull(seen)).skipped;
+      }
+    } catch (err) {
+      // Pages stored before the failure are in the store: err.partial lists
+      // them, so the app can show them now instead of after a reload.
+      if (err && typeof err === 'object') Object.assign(err, { partial: seen });
+      throw err;
     }
     if (!pushError) await store.setMeta('lastSyncAt', now());
-    return { pushed, pulled: result.pulled, received: result.received, skipped: result.skipped, pushError };
+    return { pushed, pulled: seen.pulled, received: seen.received, skipped, pushError };
   }
 
   return {

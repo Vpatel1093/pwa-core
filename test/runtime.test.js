@@ -223,3 +223,28 @@ test("the runtime's sync names the app, so another app's server refuses it", asy
   assert.match(String(statuses.at(-1)?.error ?? ''), /not 'notes'/);
   rt.close();
 });
+
+test('events stored before a later page fails still reach the app and the other tabs', async () => {
+  const srv = fakeServer({ pageSize: 1 });
+  const writer = await boot({ srv });
+  await writer.rt.record(note(writer.rt, 'one'));
+  await writer.rt.record(note(writer.rt, 'two'));
+  await writer.rt.runSync();
+  writer.rt.close();
+  const fetch = srv.fetch;
+  let gets = 0;
+  srv.fetch = async (url, opts) => {
+    if (!opts?.method && ++gets === 2) throw new TypeError('Failed to fetch');
+    return fetch(url, opts);
+  };
+  /** @type {unknown[]} */
+  const posted = [];
+  const channel = /** @type {BroadcastChannel} */ (/** @type {unknown} */ ({ postMessage: (/** @type {unknown} */ m) => posted.push(m), close() {}, addEventListener() {}, removeEventListener() {} }));
+  const reader = await boot({ srv, channel });
+  const s = await reader.rt.runSync();
+  assert.equal(s.status, 'offline');
+  assert.equal((await reader.store.allEvents()).length, 1, 'page 1 was stored');
+  assert.deepEqual(reader.seen.filter((x) => x.source === 'sync').flatMap((x) => x.ids).length, 1, 'and handed to the app');
+  assert.equal(posted.length, 1, 'and shared with the other tabs');
+  reader.rt.close();
+});
