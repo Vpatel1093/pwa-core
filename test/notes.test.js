@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClock } from '../app/core/clock.js';
-import { noteAdded, noteDone, validateEvent, buildNotes, applyEvent, listNotes, MAX_NOTE_CHARS } from '../app/js/notes.js';
+import { noteAdded, noteDone, validateEvent, buildNotes, applyEvent, listNotes, MAX_NOTE_CHARS, NOTE_TYPES } from '../app/js/notes.js';
+import { parseImport } from '../app/core/backup.js';
 
 const ctx = (deviceId = 'dev-a', t = 1000) => ({ clock: createClock({ now: () => t }), deviceId, appVersion: 't', tz: 'UTC', now: () => t });
 
@@ -60,4 +61,12 @@ test('done for a note this device has not seen yet waits for the note', () => {
   assert.equal(listNotes(s).length, 0);
   applyEvent(s, a);
   assert.equal(listNotes(s)[0].done, true);
+});
+
+test('NOTE_TYPES lists what the app makes, so a bare list of its events imports', () => {
+  const added = noteAdded(ctx(), 'Pack');
+  const done = noteDone(ctx(), added.data.note_id, true);
+  assert.deepEqual(NOTE_TYPES, ['note.added', 'note.done']);
+  const parsed = parseImport(JSON.stringify([added, done]), { format: 'notes-events', types: NOTE_TYPES });
+  assert.equal(parsed.events.length, 2);
 });

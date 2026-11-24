@@ -10,7 +10,7 @@ import { diagnosticsText } from '../core/diagnostics.js';
 import { syncLabel } from '../core/format.js';
 import { logicalDay } from '../core/days.js';
 import { APP_NAME, APP_ID, APP_VERSION, EVENT_VERSION, BACKUP_FORMAT } from './config.js';
-import { applyEvent, createNotes, listNotes, noteAdded, noteDone } from './notes.js';
+import { applyEvent, createNotes, listNotes, noteAdded, noteDone, NOTE_TYPES } from './notes.js';
 
 /** @typedef {import('../core/runtime.js').Runtime} Runtime */
 
@@ -95,7 +95,7 @@ const toggle = (n) => save(noteDone(runtime().ctx(), n.noteId, !n.done, { after:
 /** @param {File} file */
 async function importFile(file) {
   try {
-    const parsed = parseImport(await file.text(), { format: BACKUP_FORMAT });
+    const parsed = parseImport(await file.text(), { format: BACKUP_FORMAT, types: NOTE_TYPES });
     const added = await runtime().importEvents(parsed.events);
     const dupes = parsed.events.length - added.length;
     toast(`Imported ${added.length} events${dupes ? `, ${dupes} already here` : ''}${parsed.skipped ? `, ${parsed.skipped} unreadable` : ''}.`);

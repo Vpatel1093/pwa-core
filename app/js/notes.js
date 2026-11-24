@@ -26,19 +26,22 @@ const NOTE_ID = /^n_[0-9a-z]{8}$/;
 /** @param {unknown} t */
 const isText = (t) => typeof t === 'string' && t.length > 0 && t.length <= MAX_NOTE_CHARS && t === t.trim();
 
-export const validateEvent = createEventChecks({
-  version: EVENT_VERSION,
-  bodies: {
-    'note.added': (e) => {
-      if (!NOTE_ID.test(e.data.note_id ?? '')) return 'data.note_id';
-      return isText(e.data.text) ? null : 'data.text';
-    },
-    'note.done': (e) => {
-      if (!NOTE_ID.test(e.data.note_id ?? '')) return 'data.note_id';
-      return typeof e.data.done === 'boolean' ? null : 'data.done';
-    },
+/** @type {Record<string, import('../core/events.js').EventCheck>} */
+const BODIES = {
+  'note.added': (e) => {
+    if (!NOTE_ID.test(e.data.note_id ?? '')) return 'data.note_id';
+    return isText(e.data.text) ? null : 'data.text';
   },
-});
+  'note.done': (e) => {
+    if (!NOTE_ID.test(e.data.note_id ?? '')) return 'data.note_id';
+    return typeof e.data.done === 'boolean' ? null : 'data.done';
+  },
+};
+
+// The types this app makes: an imported bare event list must hold one of them.
+export const NOTE_TYPES = Object.keys(BODIES);
+
+export const validateEvent = createEventChecks({ version: EVENT_VERSION, bodies: BODIES });
 
 /** @param {EventContext} ctx @param {string} text */
 export function noteAdded(ctx, text) {

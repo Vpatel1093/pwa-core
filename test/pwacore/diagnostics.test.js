@@ -79,3 +79,12 @@ test('diagnostics cope with a fresh device and odd event types', () => {
   assert.ok(text.includes('Refused by server: 0'));
   assert.ok(!text.includes('Weird'));
 });
+
+test('a long list of refused events is cut to the first 20 and says how many more', () => {
+  const rejected = Array.from({ length: 25 }, (_, i) => ({ id: `ev-${i}`, reason: 'bad', core: '0.1.4' }));
+  const text = diagnosticsText({ ...info, meta: { ...info.meta, rejected } });
+  assert.ok(text.includes('Refused by server: 25'));
+  assert.ok(text.includes('  ev-19 bad'));
+  assert.ok(!text.includes('  ev-20 bad'));
+  assert.ok(text.includes('  and 5 more'));
+});

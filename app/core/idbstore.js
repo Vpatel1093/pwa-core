@@ -147,6 +147,16 @@ export async function openIdbStore(name, { onVersionChange = () => {} } = {}) {
       for (const id of ids) outbox.delete(id);
       await done(tx);
     },
+    async requeue(ids) {
+      const tx = await txn(['events', 'outbox'], 'readwrite');
+      const events = tx.objectStore('events');
+      const outbox = tx.objectStore('outbox');
+      for (const id of ids) {
+        const count = events.count(id);
+        count.onsuccess = () => { if (count.result > 0) outbox.put({ id }); };
+      }
+      await done(tx);
+    },
     async requeueAll() {
       const tx = await txn(['events', 'outbox'], 'readwrite');
       const outbox = tx.objectStore('outbox');

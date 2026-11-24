@@ -5,6 +5,7 @@
 
 import { MAX_SKEW_MS } from './clock.js';
 
+const MAX_REJECTED_SHOWN = 20; // the list is kept whole; the report shows the first ones
 const KNOWN_TYPE = /^[a-z]+(\.[a-z]+)*$/;
 /** @param {unknown} ms */
 const iso = (ms) => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : 'never');
@@ -61,6 +62,7 @@ export function diagnosticsText({
     `Time zone: ${clip(tz, 60)}`,
     `Browser: ${clip(userAgent, 300)}`,
     `Refused by server: ${rejected.length}`,
-    ...rejected.map((r) => `  ${clip(r?.id, 40)} ${clip(r?.reason, 80)}`),
+    ...rejected.slice(0, MAX_REJECTED_SHOWN).map((r) => `  ${clip(r?.id, 40)} ${clip(r?.reason, 80)}`),
+    ...(rejected.length > MAX_REJECTED_SHOWN ? [`  and ${rejected.length - MAX_REJECTED_SHOWN} more`] : []),
   ].join('\n');
 }

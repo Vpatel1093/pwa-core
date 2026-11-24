@@ -70,6 +70,15 @@ function contract(name, makeStore) {
       assert.deepEqual(ids(await s.outbox()), ['l1', 'r1']);
     });
 
+    test('requeue puts the named events back in the outbox, and skips ids it has no event for', async () => {
+      const s = await makeStore();
+      await s.addEvents([e('l1'), e('l2'), e('l3')], { local: true });
+      await s.markSynced(['l1', 'l2', 'l3']);
+      await s.requeue(['l1', 'l3', 'nope']);
+      assert.deepEqual(ids(await s.outbox()), ['l1', 'l3']);
+      assert.equal(await s.outboxCount(), 2);
+    });
+
     test('meta values round-trip with a fallback', async () => {
       const s = await makeStore();
       assert.equal(await s.getMeta('k', 7), 7);

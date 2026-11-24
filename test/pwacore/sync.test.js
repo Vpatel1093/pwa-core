@@ -245,6 +245,53 @@ test('events the server rejects leave the outbox and are listed, and the rest st
   assert.deepEqual((await a.store.getMeta('rejected')).map((/** @type {{ id: string }} */ x) => x.id), [bad.id]);
 });
 
+test('a rejected event is kept with the core version that sent it, and tried again by a newer core', async () => {
+  const a = device('a', fakeServer());
+  const bad = await a.tick('c1');
+  const strict = fakeServer({ rejectIds: [bad.id] });
+  await createSync({ store: a.store, clock: a.clock, fetch: strict.fetch, coreVersion: '0.1.4' }).syncOnce();
+  assert.deepEqual(await a.store.getMeta('rejected'), [{ id: bad.id, reason: 'bad', core: '0.1.4' }]);
+  assert.equal(await a.store.outboxCount(), 0, 'out of the outbox, so it cannot block the events behind it');
+
+  const same = createSync({ store: a.store, clock: a.clock, fetch: strict.fetch, coreVersion: '0.1.4' });
+  const posts = strict.posts;
+  await same.syncOnce();
+  assert.equal(strict.posts, posts, 'the same core does not send it again');
+
+  const fixed = fakeServer(); // say the next server accepts it
+  const newer = createSync({ store: a.store, clock: a.clock, fetch: fixed.fetch, coreVersion: '0.1.5' });
+  const r = await newer.syncOnce();
+  assert.equal(r.pushError, null);
+  assert.deepEqual(fixed.rows.map((e) => e.id), [bad.id], 'a newer core sends it again');
+  assert.deepEqual(await a.store.getMeta('rejected'), [], 'and it is off the list once stored');
+});
+
+test('a list from an older core (no version) is tried again, and is never cut short', async () => {
+  const a = device('a', fakeServer());
+  const events = [];
+  for (let i = 0; i < 150; i++) events.push(await a.tick(`k${i}`));
+  await a.store.setMeta('rejected', [{ id: events[0].id, reason: 'old' }]); // as 0.1.3 wrote it
+  const srv = fakeServer({ rejectIds: events.map((e) => e.id) });
+  await createSync({ store: a.store, clock: a.clock, fetch: srv.fetch, coreVersion: '0.1.4' }).syncOnce();
+  const kept = await a.store.getMeta('rejected');
+  assert.equal(kept.length, 150, 'every rejected event stays listed (no cap drops one)');
+  assert.equal(new Set(kept.map((/** @type {{ id: string }} */ x) => x.id)).size, 150, 'each once');
+  assert.ok(kept.every((/** @type {{ core: string }} */ x) => x.core === '0.1.4'));
+});
+
+test('a replaced server clears the list: every event is sent to it again', async () => {
+  const srv = fakeServer();
+  const a = device('a', srv);
+  const bad = await a.tick('c1');
+  await a.store.setMeta('rejected', [{ id: bad.id, reason: 'bad', core: '9.9.9' }]);
+  await a.store.markSynced([bad.id]);
+  await a.sync.syncOnce();
+  srv.reset('srv-2');
+  await a.sync.syncOnce();
+  assert.deepEqual(await a.store.getMeta('rejected'), []);
+  assert.deepEqual(srv.rows.map((e) => e.id), [bad.id]);
+});
+
 test('a failing push still pulls other devices\' changes', async () => {
   const srv = fakeServer();
   const b = device('b', srv);

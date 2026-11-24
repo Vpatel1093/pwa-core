@@ -3,12 +3,12 @@
 // makes the result the same on every device.
 
 import { validateEnvelope, eventBytes } from './events.js';
+import { CORE_VERSION } from './version.js';
 
 const PUSH_BATCH = 200; // events per push; the server takes up to 1000
 const PUSH_BYTES = 1024 * 1024; // the server takes bodies up to 2MB
 const PULL_PAGE = 500;
 const REQUEST_TIMEOUT_MS = 15 * 1000;
-const MAX_REJECTED_KEPT = 100;
 
 /** @typedef {import('./events.js').PwaEvent} PwaEvent */
 /**
@@ -31,13 +31,14 @@ const MAX_REJECTED_KEPT = 100;
  *   appId?: string,
  *   now?: () => number,
  *   timeoutMs?: number,
+ *   coreVersion?: string,
  * }} opts
  * appId names this app on every request, so a server of another app refuses
  * it (409) instead of mixing the two apps' events for good.
  */
 export function createSync({
   store, clock, fetch: fetchFn = globalThis.fetch.bind(globalThis), base = '', appId, now = () => Date.now(),
-  timeoutMs = REQUEST_TIMEOUT_MS,
+  timeoutMs = REQUEST_TIMEOUT_MS, coreVersion = CORE_VERSION,
 }) {
   const app = appId ? `app=${encodeURIComponent(appId)}` : '';
   /** @type {Promise<SyncResult> | null} */
@@ -77,7 +78,24 @@ export function createSync({
     return events.slice(0, n);
   }
 
+  // Rejected events leave the outbox, so they can't block the events behind
+  // them, but are never dropped: meta 'rejected' lists each one (for
+  // Settings) with the core version that sent it. A newer core (a fixed
+  // check, say) sends them again, and a server that still refuses one puts
+  // it back on the list.
+  /** @typedef {{ id: string | null, reason: string, core?: string }} Rejected */
+  async function retryRejected() {
+    /** @type {Rejected[]} */
+    const kept = await store.getMeta('rejected', []);
+    const retry = kept.filter((r) => r.core !== coreVersion && typeof r.id === 'string');
+    if (!retry.length) return;
+    await store.requeue(retry.map((r) => /** @type {string} */ (r.id)));
+    const retried = new Set(retry);
+    await store.setMeta('rejected', kept.filter((r) => !retried.has(r)));
+  }
+
   async function push() {
+    await retryRejected();
     let pushed = 0;
     for (;;) {
       const batch = fitBatch(await store.outbox(PUSH_BATCH));
@@ -87,13 +105,13 @@ export function createSync({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: batch }),
       });
-      // Rejected events will never be accepted, so they leave the outbox
-      // too (retrying would block everything behind them). They stay on this
-      // device and are listed in meta for Settings to show.
       if (Array.isArray(reply.rejected) && reply.rejected.length) {
+        /** @type {Rejected[]} */
+        const add = reply.rejected.map((/** @type {{ id?: string, index: number, reason?: unknown }} */ r) => ({ id: r.id ?? batch[r.index]?.id ?? null, reason: String(r.reason ?? ''), core: coreVersion }));
+        const ids = new Set(add.map((r) => r.id));
+        /** @type {Rejected[]} */
         const kept = await store.getMeta('rejected', []);
-        const add = reply.rejected.map((/** @type {{ id?: string, index: number, reason?: unknown }} */ r) => ({ id: r.id ?? batch[r.index]?.id ?? null, reason: String(r.reason ?? '') }));
-        await store.setMeta('rejected', [...kept, ...add].slice(-MAX_REJECTED_KEPT));
+        await store.setMeta('rejected', [...kept.filter((r) => !ids.has(r.id)), ...add]);
       }
       await store.markSynced(batch.map((e) => e.id));
       pushed += batch.length;
@@ -133,6 +151,7 @@ export function createSync({
         // Order matters: if the app dies partway, the server id still
         // differs (or the cursor is still past head) and this runs again.
         await store.requeueAll();
+        await store.setMeta('rejected', []); // all of them go to this server again
         await store.setMeta('pullCursor', 0);
         await store.setMeta('pullCursorId', null);
         if (page.server_id) await store.setMeta('serverId', page.server_id);

@@ -3,6 +3,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -620,6 +621,61 @@ class HttpTest(unittest.TestCase):
 
     def test_idle_connections_time_out(self):
         self.assertLessEqual(server.Handler.timeout, 60)
+
+
+class ConnectionCapTest(unittest.TestCase):
+    """Each connection holds a thread; past the cap a new one gets a 503 at once
+    instead of another thread, so idle or slow clients can't pile threads up."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.httpd = server.make_server(
+            "127.0.0.1", 0, Path(self.tmp.name) / "e.db", Path(self.tmp.name), quiet=True, max_connections=2
+        )
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.socks = []
+
+    def tearDown(self):
+        for s in self.socks:
+            s.close()
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.httpd.store.close()
+        self.tmp.cleanup()
+
+    def idle(self):
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.socks.append(s)
+        return s
+
+    def health(self):
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            s.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            out = b""
+            while chunk := s.recv(65536):
+                out += chunk
+            return out
+        finally:
+            s.close()
+
+    def test_past_the_cap_a_connection_gets_a_503_and_a_freed_slot_is_reused(self):
+        self.assertEqual(server.MAX_CONNECTIONS, 64)
+        self.assertTrue(self.health().startswith(b"HTTP/1.0 200") or self.health().startswith(b"HTTP/1.1 200"))
+        first, _second = self.idle(), self.idle()
+        time.sleep(0.2)  # both are being served (waiting for a request line)
+        busy = self.health()
+        self.assertTrue(busy.startswith(b"HTTP/1.1 503"), busy[:60])
+        self.assertIn(b"server busy", busy)
+        first.close()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if b" 200 " in self.health()[:20]:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the freed slot was not reused")
 
 
 if __name__ == "__main__":

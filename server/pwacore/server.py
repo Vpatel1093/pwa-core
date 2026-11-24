@@ -35,6 +35,7 @@ origin are refused.
 
 import argparse
 import json
+import queue
 import sqlite3
 import subprocess
 import sys
@@ -48,7 +49,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-VERSION = "0.1.3"  # core version; matches app/core/version.js (a test checks)
+VERSION = "0.1.4"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
 DEFAULT_STATIC = ROOT / "app"
@@ -61,6 +62,7 @@ MAX_TS = 2**53 - 1  # largest integer JavaScript represents exactly
 MAX_DEPTH = 32  # objects and arrays deep, the event itself is 1; matches app/core/events.js
 MAX_CURSOR = 2**63 - 1  # SQLite INTEGER range
 DEFAULT_PAGE = 500
+MAX_CONNECTIONS = 64  # open at once; each holds a thread (a browser opens about 6)
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 SECURITY_HEADERS = {
@@ -509,13 +511,84 @@ class Handler(SimpleHTTPRequestHandler):
         )
 
 
-def make_server(host, port, db_path, static_dir, allowed_hosts=(), quiet=False, app_version=VERSION, app_id=None):
+BUSY_BODY = b'{"error":"server busy"}'
+BUSY_REPLY = (
+    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json; charset=utf-8\r\n"
+    b"Content-Length: %d\r\nRetry-After: 5\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n%s"
+) % (len(BUSY_BODY), BUSY_BODY)
+
+
+class CappedServer(ThreadingHTTPServer):
+    """A thread per connection, up to max_connections at once. Past that a
+    connection is handed to one helper thread that reads its request, replies
+    503 and closes it, so idle or slow clients (each may sit for
+    Handler.timeout) can't pile up threads without end. (Closing it unread
+    would reset it, and the client would lose the reply.)"""
+
+    BUSY_QUEUE = 16  # past this many waiting for their 503, a connection is just closed
+
+    def __init__(self, address, handler, max_connections=MAX_CONNECTIONS):
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._busy = queue.Queue(self.BUSY_QUEUE)
+        super().__init__(address, handler)
+        threading.Thread(target=self._reply_busy, daemon=True).start()
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                self._busy.put_nowait(request)
+            except queue.Full:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()  # no thread started, so none will release it
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def _reply_busy(self):
+        while (request := self._busy.get()) is not None:
+            try:
+                request.settimeout(1)
+                head = b""
+                while b"\r\n\r\n" not in head and len(head) < 16384 and (chunk := request.recv(4096)):
+                    head += chunk
+                request.sendall(BUSY_REPLY)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+
+    def server_close(self):
+        super().server_close()
+        try:
+            self._busy.put_nowait(None)
+        except queue.Full:
+            pass  # a daemon thread: it ends with the process
+
+
+def make_server(
+    host,
+    port,
+    db_path,
+    static_dir,
+    allowed_hosts=(),
+    quiet=False,
+    app_version=VERSION,
+    app_id=None,
+    max_connections=MAX_CONNECTIONS,
+):
     store = EventStore(db_path, app_id=app_id)
     extra = frozenset(h.strip().lower() for h in allowed_hosts)
     handler = partial(
         Handler, store=store, allowed_hosts=extra, quiet=quiet, app_version=app_version, directory=str(static_dir)
     )
-    httpd = ThreadingHTTPServer((host, port), handler)
+    httpd = CappedServer((host, port), handler, max_connections=max_connections)
     httpd.store = store
     return httpd
 

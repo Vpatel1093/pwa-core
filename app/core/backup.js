@@ -38,6 +38,17 @@ export function backupFilename(prefix, today) {
   return `${prefix}-backup-${today}.json`;
 }
 
+// A bare list or JSON lines has no format name to check, so its events'
+// types must be the app's: at least one sound event of a type in `types`.
+// (One known type is enough: a newer version adds types this one lacks.)
+/** @param {EventsImport} result @param {string[] | undefined} types @returns {EventsImport} */
+function fromThisApp(result, types) {
+  if (!Array.isArray(types) || !types.length) throw new Error('parseImport needs the app\'s event types to import a bare event list.');
+  const known = new Set(types);
+  if (result.events.length && !result.events.some((e) => known.has(e.type))) throw new Error('These events are from another app.');
+  return result;
+}
+
 /** @param {unknown[]} list @returns {EventsImport} */
 function eventsResult(list) {
   /** @type {PwaEvent[]} */
@@ -50,15 +61,16 @@ function eventsResult(list) {
   return { kind: 'events', events, skipped };
 }
 
+// types: the event types this app makes, to check a bare list (see fromThisApp).
 // recognize(data): return a result for a file the app knows, or null.
 // expected: what the error names when nothing fits ("a backup or a chart").
 /**
  * @template [R=never]
  * @param {unknown} text
- * @param {{ format?: string, recognize?: (data: any) => R | null, expected?: string }} [opts]
+ * @param {{ format?: string, types?: string[], recognize?: (data: any) => R | null, expected?: string }} [opts]
  * @returns {EventsImport | R}
  */
-export function parseImport(text, { format, recognize = () => null, expected = 'a backup' } = {}) {
+export function parseImport(text, { format, types, recognize = () => null, expected = 'a backup' } = {}) {
   needFormat(format);
   const trimmed = String(text ?? '').trim();
   if (!trimmed) throw new Error('The file is empty.');
@@ -73,7 +85,7 @@ export function parseImport(text, { format, recognize = () => null, expected = '
       throw new Error("Couldn't read the file as JSON.");
     }
   }
-  if (Array.isArray(data)) return eventsResult(data);
+  if (Array.isArray(data)) return fromThisApp(eventsResult(data), types);
   if (data && data.format === format) {
     if (data.format_version > BACKUP_VERSION) throw new Error('This backup is from a newer version of the app.');
     return eventsResult(Array.isArray(data.events) ? data.events : []);

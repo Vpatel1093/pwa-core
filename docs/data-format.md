@@ -41,7 +41,7 @@ An edit passes `after` (the winning event's `ts`) to `makeEvent`. The new event 
 
 ## Sync
 
-`POST /api/events` takes `{"events": [...]}` (up to 1000 events, 2MB). It stores every acceptable event, ignores ids it already has, and lists the rest in `rejected`. Retrying a rejected event won't help, so the device drops it from its outbox and lists it in diagnostics.
+`POST /api/events` takes `{"events": [...]}` (up to 1000 events, 2MB). It stores every acceptable event, ignores ids it already has, and lists the rest in `rejected`. Sending a rejected event again won't help, so it leaves the outbox (it can't block the events behind it) but is kept: the device lists it, with its core version, in meta `rejected` (diagnostics shows it). A newer core sends it again, and a server that still refuses it puts it back on the list. The event itself stays on the device either way.
 
 `GET /api/events?after=<cursor>&limit=<n>` pages through events in the order the server stored them. Each page has `next`, `more`, `server_id`, `app_id`, `head` and `after_id` (the id of the event at the cursor).
 

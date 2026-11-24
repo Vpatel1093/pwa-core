@@ -15,6 +15,7 @@
  *   outbox(limit?: number): Promise<PwaEvent[]>,
  *   outboxCount(): Promise<number>,
  *   markSynced(ids: string[]): Promise<void>,
+ *   requeue(ids: string[]): Promise<void>,
  *   requeueAll(): Promise<void>,
  * }} Store
  */
@@ -63,6 +64,9 @@ export function createMemoryStore() {
     },
     async markSynced(ids) {
       for (const id of ids) outbox.delete(id);
+    },
+    async requeue(ids) {
+      for (const id of ids) if (events.has(id)) outbox.add(id);
     },
     async requeueAll() {
       for (const id of events.keys()) outbox.add(id);
