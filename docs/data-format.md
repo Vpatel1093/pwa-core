@@ -8,6 +8,27 @@ The app runs on several devices, often offline, and syncs through a small server
 
 So the only stored data is an append-only list of events. Each device builds the current state from the log. The server stores events and returns them. It never reads them beyond a few checks.
 
+## What the core stores, and what it leaves to the app
+
+The core sets the event envelope (below) and its own stores. It never sets the shape of an app's data.
+
+| where | store | holds |
+|---|---|---|
+| browser, IndexedDB database named `APP_ID` | `events` | the full log |
+| | `outbox` | ids of local events not pushed yet |
+| | `meta` | the core's own keys: device id, clock, sync cursor, last sync and export times, rejected events |
+| server, `data/<DB_NAME>` (SQLite) | `events` | the log, in the order the server stored it |
+| | `meta` | `server_id`, `app_id` |
+
+These belong to the core. An app does not add stores, tables or `meta` keys to them, and does not read them except through the core's functions. A newer core may change them.
+
+App data that is not events goes in the app's own place:
+
+- In the browser: its own IndexedDB database, with a name other than `APP_ID` (for example `<APP_ID>-cache`).
+- On the server: its own SQLite file in `data/`, next to the event database, never a new table inside it. The event database can then be checked, backed up, restored or rebuilt by devices without touching app data, and the reverse.
+
+Data kept that way does not sync, is not in exports and is not rebuilt after a reset. So it must only be data the app can lose or get again: caches (place lookups, a map tile), or a server inbox whose rows turn into events once a device takes them. Anything the user would miss belongs in events.
+
 ## Event envelope
 
 | field         | notes |
