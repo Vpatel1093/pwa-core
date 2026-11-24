@@ -2,7 +2,7 @@
 //
 //   npm run install-into -- ../mandalart [--force]
 //
-// Copies app/core, server/pwacore and tools/pwacore into the app, removes
+// Copies app/core, server/pwacore, test/pwacore and tools/pwacore into the app, removes
 // files the core no longer has, and writes core.lock.json: the core
 // version, this repo's state (commit, or null before the first commit) and a
 // sha256 per file. The app's tests check the lock, so the copy is never

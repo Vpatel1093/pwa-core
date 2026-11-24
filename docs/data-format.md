@@ -1,6 +1,6 @@
 # Data format
 
-How a core app stores data, and the rules every device follows so all copies agree. Tests cover each rule: `test/events.test.js`, `test/lww.test.js`, `test/sync.test.js` and `server/test_server.py`.
+How a core app stores data, and the rules every device follows so all copies agree. Tests cover each rule: `test/pwacore/events.test.js`, `test/pwacore/lww.test.js`, `test/pwacore/sync.test.js` and `server/pwacore/test_server.py`.
 
 ## Why an event log
 

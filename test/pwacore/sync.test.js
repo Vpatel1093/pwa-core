@@ -1,24 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock } from '../app/core/clock.js';
-import { makeEvent, createEventChecks } from '../app/core/events.js';
-import { keepNewest } from '../app/core/lww.js';
-import { createMemoryStore } from '../app/core/memstore.js';
-import { createSync } from '../app/core/sync.js';
+import { createClock } from '../../app/core/clock.js';
+import { makeEvent, createEventChecks } from '../../app/core/events.js';
+import { keepNewest } from '../../app/core/lww.js';
+import { createMemoryStore } from '../../app/core/memstore.js';
+import { createSync } from '../../app/core/sync.js';
 import { fakeServer } from './helpers/fake-server.js';
 
 // A stand-in app: `flag.set` turns a flag on or off for a key, newest wins.
 const validateEvent = createEventChecks({
   bodies: { 'flag.set': (e) => (typeof e.data.key === 'string' && typeof e.data.on === 'boolean' ? null : 'data') },
 });
-/** @typedef {import('../app/core/events.js').PwaEvent} PwaEvent */
-/** @typedef {import('../app/core/events.js').EventContext} EventContext */
+/** @typedef {import('../../app/core/events.js').PwaEvent} PwaEvent */
+/** @typedef {import('../../app/core/events.js').EventContext} EventContext */
 
 /** @param {EventContext} ctx @param {string} key @param {boolean} on */
 const flagSet = (ctx, key, on) => makeEvent(ctx, { type: 'flag.set', scope_id: 'ch', data: { key, on } });
 /** @param {PwaEvent[]} events */
 function buildFlags(events) {
-  /** @type {Map<string, import('../app/core/lww.js').Stamp & { value: boolean }>} */
+  /** @type {Map<string, import('../../app/core/lww.js').Stamp & { value: boolean }>} */
   const flags = new Map();
   for (const e of events) if (e.type === 'flag.set' && validateEvent(e) === null) keepNewest(flags, e.data.key, e, e.data.on);
   return flags;

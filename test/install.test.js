@@ -50,8 +50,8 @@ function fakeApp(t) {
   return app;
 }
 
-test('the vendored folders are the core, the core server and the core tools', () => {
-  assert.deepEqual(VENDORED, ['app/core', 'server/pwacore', 'tools/pwacore']);
+test('the vendored folders are the core, the core server, the core tests and the core tools', () => {
+  assert.deepEqual(VENDORED, ['app/core', 'server/pwacore', 'test/pwacore', 'tools/pwacore']);
 });
 
 test('installCore copies only the vendored folders and leaves the app alone', (t) => {
@@ -90,7 +90,7 @@ test('checkLock catches a hand edit, a missing file and an added file', (t) => {
   assert.deepEqual(checkLock(app), [
     'app/core/a.js was edited by hand: change it in pwa-core and install again',
     'tools/pwacore/lock.mjs is missing',
-    'server/pwacore/mine.py is not part of the core: app code goes outside app/core, server/pwacore and tools/pwacore',
+    'server/pwacore/mine.py is not part of the core: app code goes outside app/core, server/pwacore, test/pwacore and tools/pwacore',
   ]);
 });
 
@@ -158,11 +158,13 @@ test('installCore refuses to install the core into itself', (t) => {
   assert.throws(() => installCore({ from: core, to: core, source: {} }), /itself/);
 });
 
-test('the real core lists every vendored file and no test or example file', () => {
+test("the real core lists every vendored file, its own tests and no app's test", () => {
   const files = coreFiles(CORE);
   assert.ok(files.includes('app/core/events.js'));
   assert.ok(files.includes('server/pwacore/server.py'));
   assert.ok(files.includes('tools/pwacore/lock.mjs'));
   assert.ok(files.every((f) => VENDORED.some((d) => f.startsWith(`${d}/`))));
-  assert.ok(!files.some((f) => f.includes('__pycache__') || f.includes('test')));
+  assert.ok(files.includes('test/pwacore/sync.test.js') && files.includes('server/pwacore/test_server.py'));
+  assert.ok(!files.some((f) => f.includes('__pycache__')));
+  assert.ok(!files.some((f) => /^test\/[^/]+$/.test(f)), "the app's own tests (test/*.test.js) stay the app's");
 });

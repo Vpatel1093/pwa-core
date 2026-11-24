@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { uuidv7, uuidv7Time } from '../app/core/uuid.js';
+import { uuidv7, uuidv7Time } from '../../app/core/uuid.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -26,7 +26,7 @@ test('uuidv7 ids are unique', () => {
 });
 
 test('randomId makes short opaque ids with a prefix', async () => {
-  const { randomId } = await import('../app/core/uuid.js');
+  const { randomId } = await import('../../app/core/uuid.js');
   const ids = new Set(Array.from({ length: 500 }, () => randomId('n')));
   assert.equal(ids.size, 500);
   for (const id of ids) assert.match(id, /^n_[0-9a-z]{8}$/);

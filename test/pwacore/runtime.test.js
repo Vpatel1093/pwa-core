@@ -2,14 +2,14 @@
 // the clock, sync, and other tabs. It has no DOM, so it runs here.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createMemoryStore } from '../app/core/memstore.js';
-import { makeEvent } from '../app/core/events.js';
-import { startRuntime } from '../app/core/runtime.js';
+import { createMemoryStore } from '../../app/core/memstore.js';
+import { makeEvent } from '../../app/core/events.js';
+import { startRuntime } from '../../app/core/runtime.js';
 import { fakeServer } from './helpers/fake-server.js';
 
 let channelCount = 0;
 
-/** @typedef {import('../app/core/runtime.js').Runtime} Runtime */
+/** @typedef {import('../../app/core/runtime.js').Runtime} Runtime */
 
 /**
  * @param {Partial<Parameters<typeof startRuntime>[0]> & { srv?: ReturnType<typeof fakeServer>, t?: { now: number } }} [opts]
@@ -17,7 +17,7 @@ let channelCount = 0;
 async function boot({ store = createMemoryStore(), srv = fakeServer(), t = { now: 1000 }, ...opts } = {}) {
   /** @type {{ source: string, ids: string[] }[]} */
   const seen = [];
-  /** @type {import('../app/core/runtime.js').SyncStatus[]} */
+  /** @type {import('../../app/core/runtime.js').SyncStatus[]} */
   const statuses = [];
   const rt = await startRuntime({
     store,

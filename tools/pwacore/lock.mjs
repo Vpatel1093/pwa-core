@@ -1,5 +1,5 @@
-// The vendored core and its lock. An app holds a copy of the core in the
-// VENDORED folders and a core.lock.json that lists a sha256 per file. The
+// The vendored core and its lock. An app holds a copy of the core (and the
+// core's own tests, so they run in every app) in the VENDORED folders and a core.lock.json that lists a sha256 per file. The
 // app's tests run checkLock, so a hand edit to the copy fails the suite:
 // a fix the core needs is made in pwa-core and installed again
 // (pwa-core's tools/install.mjs).
@@ -12,7 +12,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const LOCK_FILE = 'core.lock.json';
-export const VENDORED = ['app/core', 'server/pwacore', 'tools/pwacore'];
+export const VENDORED = ['app/core', 'server/pwacore', 'test/pwacore', 'tools/pwacore'];
 
 /** @typedef {Record<string, string>} FileHashes path -> sha256 hex */
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock, MAX_SKEW_MS } from '../app/core/clock.js';
+import { createClock, MAX_SKEW_MS } from '../../app/core/clock.js';
 
 test('tick uses the device time when it is ahead', () => {
   const clock = createClock({ now: () => 1000 });

@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock } from '../app/core/clock.js';
+import { createClock } from '../../app/core/clock.js';
 import {
   makeEvent, validateEnvelope, createEventChecks, maxTs, MAX_EVENT_BYTES, MAX_DEPTH,
-} from '../app/core/events.js';
-import { uuidv7Time } from '../app/core/uuid.js';
+} from '../../app/core/events.js';
+import { uuidv7Time } from '../../app/core/uuid.js';
 
 const ctx = (t = 1000, extra = {}) => ({
   clock: createClock({ now: () => t }),

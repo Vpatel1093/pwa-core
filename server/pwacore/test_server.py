@@ -188,7 +188,7 @@ class AppSettingsTest(unittest.TestCase):
         self.assertEqual(body["core_version"], server.VERSION)
 
     def test_the_launcher_runs_the_core(self):
-        launcher = (Path(__file__).parent / "server.py").read_text()
+        launcher = (Path(__file__).parent.parent / "server.py").read_text()  # the app's server/server.py
         self.assertIn("from pwacore.server import main", launcher)
 
 

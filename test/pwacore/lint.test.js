@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RUFF_VERSION, lintPlan, runLint, parseFileList } from '../tools/pwacore/lint.mjs';
+import { RUFF_VERSION, lintPlan, runLint, parseFileList } from '../../tools/pwacore/lint.mjs';
 
 const ruff = ['uvx', `ruff@${RUFF_VERSION}`];
 

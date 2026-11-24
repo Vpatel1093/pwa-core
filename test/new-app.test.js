@@ -104,13 +104,32 @@ test('a new app leaves out the core-only tools and gets the lock test, which cat
   assert.equal(pkg.scripts['install-into'], undefined, 'install-into is core-only');
   assert.equal(pkg.scripts['new-app'], undefined, 'new-app is core-only');
   const { NODE_TEST_CONTEXT, ...env } = process.env;
-  const run = () => spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/core-lock.test.js'], { cwd: to, encoding: 'utf8', env });
+  const run = () => spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/pwacore/core-lock.test.js'], { cwd: to, encoding: 'utf8', env });
   const ok = run();
   assert.match(ok.stdout, /# pass 1/, 'the lock test runs and passes in the app');
   writeFileSync(join(to, 'app/core/uuid.js'), `${readFileSync(join(to, 'app/core/uuid.js'), 'utf8')}// hand edit\n`);
   const bad = run();
   assert.notEqual(bad.status, 0, 'a hand edit to the vendored core fails the app\'s tests');
   assert.match(bad.stdout, /app\/core\/uuid\.js/);
+});
+
+test("a new app gets the core's own tests, covered by the lock, and they pass there", (t) => {
+  const to = join(scratch(t), 'tested');
+  newApp({ from: CORE, to, id: 'tested', name: 'Tested' });
+  const lock = JSON.parse(readFileSync(join(to, 'core.lock.json'), 'utf8'));
+  for (const f of ['test/pwacore/events.test.js', 'test/pwacore/sync.test.js', 'test/pwacore/helpers/fake-server.js', 'server/pwacore/test_server.py']) {
+    assert.ok(Object.hasOwn(lock.files, f), `${f} travels with the core`);
+  }
+  const { NODE_TEST_CONTEXT, ...env } = process.env;
+  const js = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/pwacore/events.test.js', 'test/pwacore/agree.test.js'], { cwd: to, encoding: 'utf8', env });
+  assert.equal(js.status, 0, js.stdout);
+  assert.match(js.stdout, /# fail 0/);
+  const pkg = JSON.parse(readFileSync(join(to, 'package.json'), 'utf8'));
+  assert.match(pkg.scripts['test:js'], /test\/pwacore\/\*\.test\.js/, 'npm test runs them');
+  writeFileSync(join(to, 'test/pwacore/uuid.test.js'), `${readFileSync(join(to, 'test/pwacore/uuid.test.js'), 'utf8')}// hand edit\n`);
+  const bad = spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/pwacore/core-lock.test.js'], { cwd: to, encoding: 'utf8', env });
+  assert.notEqual(bad.status, 0, "a hand edit to the core's tests fails the lock too");
+  assert.match(bad.stdout, /test\/pwacore\/uuid\.test\.js/);
 });
 
 test('newApp leaves out local, generated and private files', (t) => {

@@ -5,8 +5,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { indexedDB as fakeIndexedDB, forceCloseDatabase } from 'fake-indexeddb';
-import { createMemoryStore } from '../app/core/memstore.js';
-import { openIdbStore } from '../app/core/idbstore.js';
+import { createMemoryStore } from '../../app/core/memstore.js';
+import { openIdbStore } from '../../app/core/idbstore.js';
 
 // idbstore uses the global, as in a browser. Record every connection it
 // opens so tests can close them underneath it.
@@ -27,12 +27,12 @@ let dbCount = 0;
 /** @param {{ onVersionChange?: () => void }} [opts] */
 const freshIdb = (opts) => openIdbStore(`test-${++dbCount}`, opts);
 
-/** @param {string} id @returns {import('../app/core/events.js').PwaEvent} */
+/** @param {string} id @returns {import('../../app/core/events.js').PwaEvent} */
 const e = (id) => ({ id, v: 1, type: 'x', scope_id: 's', ts: 1, device_id: 'd', data: {} });
 /** @param {{ id: string }[]} list */
 const ids = (list) => list.map((x) => x.id).sort();
 
-/** @param {string} name @param {() => import('../app/core/memstore.js').Store | Promise<import('../app/core/memstore.js').Store>} makeStore */
+/** @param {string} name @param {() => import('../../app/core/memstore.js').Store | Promise<import('../../app/core/memstore.js').Store>} makeStore */
 function contract(name, makeStore) {
   describe(`${name} store`, () => {
     test('addEvents returns only the new ones and keeps the first copy', async () => {

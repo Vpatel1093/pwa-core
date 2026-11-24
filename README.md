@@ -46,7 +46,7 @@ Then make it your app:
 | `server/server.py` | Starts the server with the app's database name and version | The app |
 | `tools/pwacore/` | `build`, `check`, `lint`, the vendored-copy lock check | The core |
 | `tools/new-app.mjs`, `tools/install.mjs` | Start an app; install the core into one. A new app leaves them (and their tests and scripts) out | The core only |
-| `test/core-lock.test.js` | In an app: fails if the vendored core doesn't match `core.lock.json` | The app gets it |
+| `test/pwacore/` | The core's own tests (and `core-lock.test.js`: in an app, fails if the vendored core doesn't match `core.lock.json`) | The app gets them, vendored |
 | `tsconfig.json`, `tsconfig.sw.json` | The type check (see Checks). A new app gets them | The app |
 | `eslint.config.js`, `ruff.toml`, `.githooks/` | Lint and the git hooks (see Checks). A new app gets them | The app |
 | `core.lock.json` | In an app: the core version and source, and a sha256 per vendored file | Written by `install.mjs` |
@@ -97,7 +97,7 @@ Tests need Node 20+ (`npm install` once for TypeScript, ESLint and the test-only
 
 ## Updating an app's core
 
-An app holds a vendored copy of the core in `app/core/`, `server/pwacore/` and `tools/pwacore/`, and a `core.lock.json` with a sha256 per file. Its `test/core-lock.test.js` (new-app adds it) runs the lock check (`checkLock` from `tools/pwacore/lock.mjs`), so a hand edit fails the suite. A fix the core needs is made here, with its tests, then installed again:
+An app holds a vendored copy of the core in `app/core/`, `server/pwacore/`, `test/pwacore/` and `tools/pwacore/`, and a `core.lock.json` with a sha256 per file. The core's tests travel with it, so `npm test` in the app runs them against the app's copy. Its `test/pwacore/core-lock.test.js` runs the lock check (`checkLock` from `tools/pwacore/lock.mjs`), so a hand edit fails the suite. A fix the core needs is made here, with its tests, then installed again:
 
 ```sh
 npm run install-into -- ../<app>     # copies the three folders, removes dropped files, writes the lock

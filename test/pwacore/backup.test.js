@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock } from '../app/core/clock.js';
-import { makeEvent } from '../app/core/events.js';
-import { makeBackup, parseImport, backupFilename } from '../app/core/backup.js';
+import { createClock } from '../../app/core/clock.js';
+import { makeEvent } from '../../app/core/events.js';
+import { makeBackup, parseImport, backupFilename } from '../../app/core/backup.js';
 
 const FORMAT = 'demo-events';
 const ctx = { clock: createClock(), deviceId: 'd', appVersion: '0.1.0', tz: 'UTC' };

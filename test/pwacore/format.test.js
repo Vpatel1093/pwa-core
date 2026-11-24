@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ago, syncLabel } from '../app/core/format.js';
+import { ago, syncLabel } from '../../app/core/format.js';
 
 test('ago: coarse, human, never negative', () => {
   const now = 1_000_000_000;

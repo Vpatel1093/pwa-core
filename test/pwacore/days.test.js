@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   logicalDay, isValidDay, addDays, weekday, weekStart, weekDays, windowDays, dayLabel,
-} from '../app/core/days.js';
+} from '../../app/core/days.js';
 
 // Dates built with the local-time constructor, so these tests hold in any TZ.
 /** @param {number} y @param {number} mo @param {number} d */

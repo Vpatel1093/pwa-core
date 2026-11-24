@@ -6,8 +6,6 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { APP_NAME, APP_ID, APP_VERSION } from '../app/js/config.js';
-import { CORE_VERSION } from '../app/core/version.js';
-import { MAX_ID_LEN, MAX_EVENT_BYTES, MAX_DEPTH } from '../app/core/events.js';
 
 const APP = new URL('../app/', import.meta.url).pathname;
 const sw = readFileSync(join(APP, 'sw.js'), 'utf8');
@@ -27,11 +25,6 @@ test('service worker version matches the app version', () => {
 
 test('service worker storage id matches the app', () => {
   assert.equal(/const APP_ID = '([^']+)'/.exec(sw)?.[1], APP_ID);
-});
-
-test('server version matches the core version', () => {
-  const py = readFileSync(new URL('../server/pwacore/server.py', import.meta.url), 'utf8');
-  assert.equal(/^VERSION = "([^"]+)"/m.exec(py)?.[1], CORE_VERSION);
 });
 
 test("the app's server launcher names the same app id, so its database refuses another app", () => {
@@ -58,18 +51,6 @@ test('manifest and page use the app name and storage id', () => {
   const text = (s) => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   assert.equal(text(/<title>([^<]*)<\/title>/.exec(html)?.[1]), APP_NAME);
   assert.equal(text(/name="apple-mobile-web-app-title" content="([^"]*)"/.exec(html)?.[1]), APP_NAME);
-});
-
-test('client and server agree on event limits', () => {
-  const py = readFileSync(new URL('../server/pwacore/server.py', import.meta.url), 'utf8');
-  /** @param {string} name */
-  const num = (name) => {
-    const expr = String(new RegExp(`^${name} = ([0-9* ]+)`, 'm').exec(py)?.[1]);
-    return expr.split('*').reduce((a, b) => a * Number(b.trim()), 1);
-  };
-  assert.equal(num('MAX_ID_LEN'), MAX_ID_LEN);
-  assert.equal(num('MAX_EVENT_BYTES'), MAX_EVENT_BYTES);
-  assert.equal(num('MAX_DEPTH'), MAX_DEPTH);
 });
 
 test('service worker caches every app file', () => {

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createClock } from '../app/core/clock.js';
-import { makeEvent } from '../app/core/events.js';
-import { diagnosticsText } from '../app/core/diagnostics.js';
+import { createClock } from '../../app/core/clock.js';
+import { makeEvent } from '../../app/core/events.js';
+import { diagnosticsText } from '../../app/core/diagnostics.js';
 
 const NOW = Date.UTC(2026, 8, 24, 12);
 const ctx = { clock: createClock({ now: () => NOW }), deviceId: '0190aaaa-bbbb-7ccc-8ddd-eeeeee123456', appVersion: '0.2.1', tz: 'UTC', now: () => NOW };

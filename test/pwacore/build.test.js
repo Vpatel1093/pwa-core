@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findImports, checkApp, buildApp } from '../tools/pwacore/build-lib.mjs';
+import { findImports, checkApp, buildApp } from '../../tools/pwacore/build-lib.mjs';
 
 test('findImports lists static, re-export and dynamic imports', () => {
   const src = `

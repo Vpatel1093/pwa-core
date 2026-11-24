@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 // Mirrors server/server.py: dedupe by id, seq cursor, paging, server_id,
 // head, per-event rejects. test/integration.test.js runs the real one.
-/** @typedef {import('../../app/core/events.js').PwaEvent} PwaEvent */
+/** @typedef {import('../../../app/core/events.js').PwaEvent} PwaEvent */
 
 /** @param {{ pageSize?: number, serverId?: string, rejectIds?: string[], appId?: string | null }} [opts] */
 export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [], appId = null } = {}) {
@@ -19,7 +19,7 @@ export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [],
     // Roll back to the first n rows, keeping the server id (a restored backup).
     /** @param {number} n */
     restore(n) { for (const e of rows.splice(n)) ids.delete(e.id); },
-    /** @type {import('../../app/core/sync.js').FetchLike} */
+    /** @type {import('../../../app/core/sync.js').FetchLike} */
     async fetch(url, opts = {}) {
       if (srv.down) throw new TypeError('Failed to fetch');
       const u = new URL(url, 'http://x');

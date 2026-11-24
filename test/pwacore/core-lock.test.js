@@ -7,9 +7,9 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkLock } from '../tools/pwacore/lock.mjs';
+import { checkLock } from '../../tools/pwacore/lock.mjs';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = fileURLToPath(new URL('../..', import.meta.url));
 
 test('the vendored core matches core.lock.json', (t) => {
   // pwa-core itself is the source, not a copy (only it has install.mjs).
