@@ -5,11 +5,14 @@
 # Skip once with `git commit --no-verify`.
 set -eu
 
-# The staged list must come from git's own index (a `commit -a` or
-# `commit <paths>` uses a temporary one), so read it before the unset below.
-list=$(mktemp "${TMPDIR:-/tmp}/pre-commit.XXXXXX")
-trap 'rm -f "$list"' EXIT
+# Check what is staged, not what is on disk: a copy of git's index in a temp
+# folder. Read it before the unset below, since a `commit -a` or
+# `commit <paths>` uses a temporary index that GIT_INDEX_FILE names.
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/pre-commit.XXXXXX")
+list=$(mktemp "${TMPDIR:-/tmp}/pre-commit-list.XXXXXX")
+trap 'rm -rf "$tmp" "$list"' EXIT
 git diff --cached --name-only --diff-filter=ACMR -z >"$list"
+git checkout-index --all --prefix="$tmp/"
 
 # git exports GIT_DIR, GIT_INDEX_FILE and the like into hooks. A tool or a
 # test that runs git would then act on this repo or its index instead of its
@@ -17,8 +20,8 @@ git diff --cached --name-only --diff-filter=ACMR -z >"$list"
 # shellcheck disable=SC2046 # the names are git's, one word each
 unset $(git rev-parse --local-env-vars)
 
-# Lints the working tree copy of each staged file: a partly staged file is
-# checked as it is on disk.
+ln -s "$PWD/node_modules" "$tmp/node_modules"
+cd "$tmp"
 node tools/pwacore/lint.mjs --files0 "$list"
 if tr '\0' '\n' <"$list" | grep -Eq '\.(js|mjs|cjs)$'; then
   npm run --silent typecheck

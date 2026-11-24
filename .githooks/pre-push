@@ -1,8 +1,25 @@
 #!/bin/sh
-# pre-push: the full check (syntax, lint, types) and the tests.
+# pre-push: the full check (syntax, lint, types) and the tests, on each
+# commit being pushed (not on what is on disk).
 # Installed by `npm run hooks` (git config core.hooksPath .githooks).
 # Skip once with `git push --no-verify`.
 set -eu
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/pre-push.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+# git writes one line per ref being pushed: <local ref> <sha> <remote ref> <sha>.
+# A delete has an all-zero local sha and nothing to test. Each commit is
+# exported to its own folder, before the unset below.
+zero=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0')
+dirs=""
+while read -r _ sha _ _; do
+  [ "$sha" = "$zero" ] && continue
+  [ -d "$tmp/$sha" ] && continue
+  mkdir "$tmp/$sha"
+  git archive "$sha" | tar -x -C "$tmp/$sha"
+  dirs="$dirs $sha"
+done
 
 # git exports GIT_DIR and the like into hooks, and the tests run git in temp
 # repos: with these set, they would write into this one. Drop them all; git
@@ -10,6 +27,9 @@ set -eu
 # shellcheck disable=SC2046 # the names are git's, one word each
 unset $(git rev-parse --local-env-vars)
 
-# git writes the refs being pushed on stdin; nothing here reads them.
-npm run --silent check </dev/null
-npm test --silent </dev/null
+top=$PWD
+for sha in $dirs; do
+  echo "pre-push: checking $sha"
+  ln -s "$top/node_modules" "$tmp/$sha/node_modules"
+  (cd "$tmp/$sha" && npm run --silent check </dev/null && npm test --silent </dev/null)
+done

@@ -2,7 +2,8 @@
 //
 //   npm run new-app -- ../trips --id trips --name "Trips" [--git]
 //
-// Copies the core (not its git history, data, or local notes) into a new
+// Copies the core (only the files git has: not its history, data, local
+// notes, caches or anything untracked) into a new
 // folder and sets the app's name and storage id in every file that holds
 // them. --git also runs git init with the repo hygiene: TASK.md,
 // CLAUDE.local.md and .local/ excluded, this repo's commit email (a
@@ -10,9 +11,9 @@
 // (npm run hooks does the same later, for an app made without --git).
 // Nothing is committed.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, appendFileSync, renameSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { LOCK_FILE, hashFiles, listVendored, treeHash } from './pwacore/lock.mjs';
 import { gitSource } from './install.mjs';
@@ -53,16 +54,22 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
   if (to === from || to.startsWith(from + sep)) throw new Error('The new app must live outside the core folder.');
 
   mkdirSync(to, { recursive: true });
-  cpSync(from, to, {
-    recursive: true,
-    filter: (src) => {
-      const rel = relative(from, src);
-      if (!rel) return true;
-      const parts = rel.split(sep);
-      if (SKIP_TOP.has(parts[0])) return false;
-      return !parts.some((p) => p === '__pycache__' || p === '.DS_Store');
-    },
-  });
+  /** @param {string} rel */
+  const keep = (rel) => {
+    const parts = rel.split(sep);
+    return !SKIP_TOP.has(parts[0]) && !parts.some((p) => p === '__pycache__' || p === '.DS_Store');
+  };
+  // From a git repo, only what git has (committed or staged): never an
+  // untracked or ignored file such as .env, a cache or a stray database.
+  const tracked = gitFiles(from);
+  if (tracked) {
+    for (const rel of tracked.filter((p) => keep(p) && existsSync(join(from, p)))) {
+      mkdirSync(dirname(join(to, rel)), { recursive: true });
+      copyFileSync(join(from, rel), join(to, rel)); // keeps the mode (hooks stay executable)
+    }
+  } else {
+    cpSync(from, to, { recursive: true, filter: (src) => !relative(from, src) || keep(relative(from, src)) });
+  }
 
   /** @param {string} p */
   const f = (p) => join(to, p);
@@ -125,6 +132,19 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
     execFileSync('git', ['config', '--local', 'core.hooksPath', '.githooks'], { cwd: to });
   }
   return to;
+}
+
+// The files git has in from (committed or staged), or null if from is not
+// the top of a git repo.
+/** @param {string} from @returns {string[] | null} */
+function gitFiles(from) {
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: from, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (realpathSync(top) !== realpathSync(from)) return null;
+    return execFileSync('git', ['ls-files', '-z'], { cwd: from, encoding: 'utf8' }).split('\0').filter(Boolean).map((p) => p.split('/').join(sep));
+  } catch {
+    return null;
+  }
 }
 
 /** @param {string} from */

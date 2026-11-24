@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkLock } from '../tools/pwacore/lock.mjs';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync, statSync, cpSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newApp } from '../tools/new-app.mjs';
 import { RUFF_VERSION } from '../tools/pwacore/lint.mjs';
@@ -128,6 +128,31 @@ test('newApp leaves out local, generated and private files', (t) => {
   for (const f of ['TASK.md', 'CLAUDE.local.md', '.local', 'data', 'dist', 'node_modules', 'server/__pycache__', '.git', 'app/.DS_Store']) {
     assert.ok(!existsSync(join(to, f)), `${f} should not be copied`);
   }
+});
+
+test('from a git repo, newApp copies only the files git has, never untracked or ignored ones', (t) => {
+  // A small git copy of the core, so the test can leave files lying around in it.
+  const core = join(scratch(t), 'core');
+  // (CORE may itself be a plain copy, as in the pre-push hook, so no git here.)
+  const skip = new Set(['node_modules', '.git', 'dist', 'data', '.local', '.ruff_cache', '__pycache__']);
+  cpSync(CORE, core, { recursive: true, filter: (src) => !skip.has(basename(src)) });
+  /** @param {...string} args */
+  const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...args], { cwd: core, stdio: 'pipe' });
+  git('init', '-q');
+  git('add', '-A');
+  git('commit', '-qm', 'core');
+  writeFileSync(join(core, '.env'), 'SECRET=1\n');
+  mkdirSync(join(core, '.ruff_cache'));
+  writeFileSync(join(core, '.ruff_cache/x'), 'cache');
+  writeFileSync(join(core, 'scratch.db'), 'not for the new app');
+  writeFileSync(join(core, 'app/js/staged.js'), 'export const s = 1;\n');
+  git('add', 'app/js/staged.js');
+  const to = join(scratch(t), 'clean');
+  newApp({ from: core, to, id: 'clean', name: 'Clean' });
+  for (const f of ['.env', '.ruff_cache', 'scratch.db']) assert.ok(!existsSync(join(to, f)), `${f} stays behind`);
+  assert.ok(existsSync(join(to, 'app/js/staged.js')), 'a staged file comes along');
+  assert.ok(existsSync(join(to, 'app/js/config.js')));
+  assert.ok(statSync(join(to, '.githooks/pre-commit')).mode & 0o100, 'hooks stay executable');
 });
 
 test('newApp refuses a bad id, an empty name, or a folder that is not empty', (t) => {
