@@ -16,7 +16,7 @@ A small example app (a shared list of notes) shows the whole loop and proves syn
 ## Start a new app
 
 ```sh
-npm run new-app -- ../trips --id trips --name "Trips" --git
+npm run new-app -- ../trips --id trips --name "Trips" --git   # [--port N]
 cd ../trips
 npm install
 npm test
@@ -59,20 +59,22 @@ Then make it your app:
 It needs Python 3.9+ and nothing else.
 
 ```sh
-python3 server/server.py            # http://127.0.0.1:8765
+python3 server/server.py            # http://127.0.0.1:<PORT>
 ```
 
-Data goes to `data/events.db` (gitignored). Options: `--port`, `--db <file>`, `--host` (keep it on 127.0.0.1), `--allow-host <name>`, `--new-server-id`.
+The port is the `PORT =` line in `server/server.py` (8765 here, and for an app without that line). Data goes to `data/events.db` (gitignored). Options: `--port`, `--db <file>`, `--host` (keep it on 127.0.0.1), `--allow-host <name>`, `--new-server-id`.
 
 There is no login. Anyone who can reach the server can read and change everything. The server only answers requests for a loopback name or this machine's Tailscale name, which it gets from the `tailscale` command at startup. That stops web pages from reaching it through DNS tricks.
 
 To use it on your phone, put it on your tailnet with HTTPS:
 
 ```sh
-tailscale serve --bg 8765
+tailscale serve --bg --https=<PORT> <PORT>
 ```
 
-Open the `https://<machine>.<tailnet>.ts.net` address and use Add to Home Screen. HTTPS is required for offline use and install. Use `tailscale serve`, never `tailscale funnel` (that would put it on the public internet). Give each app its own port, and for a second app its own HTTPS port too: `tailscale serve --https=8443 --bg 8766`, then open `https://<machine>.<tailnet>.ts.net:8443`. Each app's database keeps its app id and refuses another app's client.
+Open `https://<machine>.<tailnet>.ts.net:<PORT>` and use Add to Home Screen. HTTPS is required for offline use and install. Use `tailscale serve`, never `tailscale funnel` (that would put it on the public internet). The HTTPS port uses the same number as the app's port, so each app is its own origin with its own browser storage. An app already on the tailnet keeps the address it has: the phone's data belongs to that address. Each app's database keeps its app id and refuses another app's client.
+
+`npm run new-app` gives each new app its own port: `--port N`, or else the lowest port from 8765 up that no other app claims. Claims are each sibling app's `PORT =` line (an app is a folder with `core.lock.json`; one without the line claims 8765) and every port `tailscale serve status` uses. It never looks at what is listening now, because apps are not always running.
 
 ## Checks
 

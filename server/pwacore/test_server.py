@@ -199,6 +199,32 @@ class AppSettingsTest(unittest.TestCase):
         self.assertEqual(body["version"], "9.9.9")
         self.assertEqual(body["core_version"], server.VERSION)
 
+    def test_port_comes_from_the_app_and_defaults_to_8765(self):
+        self.assertEqual(server.parse_args([]).port, 8765)
+        self.assertEqual(server.parse_args([], port=8766).port, 8766)
+        self.assertEqual(server.parse_args(["--port", "9000"], port=8766).port, 9000)
+
+    def test_main_takes_the_apps_port(self):
+        seen = {}
+
+        def fake_make_server(host, port, *args, **kwargs):
+            seen["port"] = port
+            raise server.WrongApp("stop here")
+
+        real = server.make_server
+        server.make_server = fake_make_server
+        try:
+            with self.assertRaises(SystemExit):
+                server.main([], port=8766)
+        finally:
+            server.make_server = real
+        self.assertEqual(seen["port"], 8766)
+
+    def test_serve_hint_uses_the_same_number_for_the_tailnet_https_port(self):
+        hint = server.serve_hint(8766, "m.t.ts.net")
+        self.assertIn("tailscale serve --bg --https=8766 8766", hint)
+        self.assertIn("https://m.t.ts.net:8766", hint)
+
     def test_the_launcher_runs_the_core(self):
         launcher = (Path(__file__).parent.parent / "server.py").read_text()  # the app's server/server.py
         self.assertIn("from pwacore.server import main", launcher)

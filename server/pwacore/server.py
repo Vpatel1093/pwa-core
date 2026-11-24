@@ -3,12 +3,12 @@
 It never looks inside events beyond a few envelope checks and never computes
 state; all app logic lives in the browser. It also serves the static app.
 
-    python3 server/server.py              # http://127.0.0.1:8765
+    python3 server/server.py              # http://127.0.0.1:<PORT> (the app's PORT, default 8765)
 
 This file is the core. Apps get a copy in server/pwacore/ (never edit it
 there); the app's own server/server.py names its database and version and
 calls main().
-    tailscale serve --bg 8765             # HTTPS on your tailnet
+    tailscale serve --bg --https=<PORT> <PORT>   # HTTPS on your tailnet, same port number
 
 API
     GET  /api/health
@@ -52,6 +52,7 @@ from urllib.parse import parse_qs, urlsplit
 VERSION = "0.1.4"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
+DEFAULT_PORT = 8765  # an app's launcher passes its own PORT; one without that line runs here
 DEFAULT_STATIC = ROOT / "app"
 
 MAX_BATCH = 1000
@@ -593,10 +594,10 @@ def make_server(
     return httpd
 
 
-def parse_args(argv=None, *, db_name=DEFAULT_DB_NAME, description="Local-first app sync server"):
+def parse_args(argv=None, *, db_name=DEFAULT_DB_NAME, description="Local-first app sync server", port=DEFAULT_PORT):
     p = argparse.ArgumentParser(description=description)
     p.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=port, help=f"default {port}, the app's PORT")
     p.add_argument("--db", type=Path, default=ROOT / "data" / db_name, help=f"SQLite file (default data/{db_name})")
     p.add_argument(
         "--allow-host",
@@ -613,11 +614,26 @@ def parse_args(argv=None, *, db_name=DEFAULT_DB_NAME, description="Local-first a
     return p.parse_args(argv)
 
 
-# db_name, app_version and app_id come from the app's server/server.py.
+def serve_hint(port, tailnet):
+    """How to put the app on the tailnet. The HTTPS port uses the same number as
+    the app's port, so each app is its own origin, with its own browser storage."""
+    return (
+        f"Phone access over Tailscale: tailscale serve --bg --https={port} {port}, then https://{tailnet}:{port}\n"
+        "(An app already on the tailnet keeps the address it has: the phone's data belongs to that address.)"
+    )
+
+
+# db_name, app_version, app_id and port come from the app's server/server.py.
 def main(
-    argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, app_id=None, description="Local-first app sync server"
+    argv=None,
+    *,
+    db_name=DEFAULT_DB_NAME,
+    app_version=VERSION,
+    app_id=None,
+    description="Local-first app sync server",
+    port=DEFAULT_PORT,
 ):
-    args = parse_args(argv, db_name=db_name, description=description)
+    args = parse_args(argv, db_name=db_name, description=description, port=port)
     try:
         tailnet = tailnet_name()
         httpd = make_server(
@@ -642,10 +658,7 @@ def main(
         print("New server id: devices will push their events again on next sync.", file=sys.stderr)
     print(f"Serving on http://{args.host}:{httpd.server_address[1]}  (db: {args.db})", file=sys.stderr)
     if tailnet:
-        print(
-            f"Phone access over Tailscale: tailscale serve --bg {httpd.server_address[1]}, then https://{tailnet}",
-            file=sys.stderr,
-        )
+        print(serve_hint(httpd.server_address[1], tailnet), file=sys.stderr)
     else:
         print(
             "Tailscale name not found, so only this computer can use the app. Start Tailscale and restart,"

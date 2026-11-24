@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newApp } from '../tools/new-app.mjs';
+import { newApp, claimedPorts, pickPort, parseServeStatus } from '../tools/new-app.mjs';
 import { RUFF_VERSION } from '../tools/pwacore/lint.mjs';
 
 const CORE = fileURLToPath(new URL('..', import.meta.url));
@@ -195,4 +195,91 @@ test('newApp with git sets up the repo hygiene', (t) => {
   assert.equal(hooks, '.githooks', 'the git hooks are on');
   const log = execFileSync('git', ['status', '--porcelain'], { cwd: to, encoding: 'utf8' });
   assert.ok(log.length > 0, 'files are left uncommitted for a first commit by hand');
+});
+
+// Ports. Each app has its own port, and its tailnet HTTPS port uses the same
+// number, so each app is its own origin with its own browser storage. A port
+// counts as taken when another app's server/server.py claims it or
+// `tailscale serve` uses it, never by what is listening now: apps are not
+// always running.
+
+/** @param {string} dir @param {Record<string, string>} files */
+function put(dir, files) {
+  for (const [f, text] of Object.entries(files)) {
+    mkdirSync(join(dir, f, '..'), { recursive: true });
+    writeFileSync(join(dir, f), text);
+  }
+}
+
+const noServe = () => null;
+
+test('newApp --port writes the port into the launcher, which passes it to the core', (t) => {
+  const to = join(scratch(t), 'ported');
+  newApp({ from: CORE, to, id: 'ported', name: 'Ported', port: 9123, serveStatus: noServe });
+  const py = readFileSync(join(to, 'server/server.py'), 'utf8');
+  assert.match(py, /^PORT = 9123\b/m);
+  assert.match(py, /port=PORT/);
+});
+
+test('without --port, newApp takes the lowest port from 8765 up that no app or tailscale serve claims', (t) => {
+  const base = scratch(t);
+  put(join(base, 'old'), { 'core.lock.json': '{}\n', 'server/server.py': 'from pwacore.server import main\n' }); // no PORT line: 8765
+  put(join(base, 'second'), { 'core.lock.json': '{}\n', 'server/server.py': 'PORT = 8766  # set by new-app\n' });
+  put(join(base, 'not-an-app'), { 'server/server.py': 'PORT = 8769\n' }); // no core.lock.json: no claim
+  put(join(base, 'no-launcher'), { 'core.lock.json': '{}\n' }); // an app without a launcher claims 8765 too
+  const serve = JSON.stringify({ TCP: { 8767: { HTTPS: true } }, Web: { 'm.t.ts.net:8767': { Handlers: { '/': { Proxy: 'http://127.0.0.1:8768' } } } } });
+  const to = join(base, 'next');
+  newApp({ from: CORE, to, id: 'next', name: 'Next', serveStatus: () => serve });
+  assert.match(readFileSync(join(to, 'server/server.py'), 'utf8'), /^PORT = 8769\b/m);
+});
+
+test('claimedPorts reads launchers and serve status, and ignores the folder being made', (t) => {
+  const base = scratch(t);
+  put(join(base, 'a'), { 'core.lock.json': '{}\n', 'server/server.py': '"""x"""\nPORT = 8800\n' });
+  put(join(base, 'b'), { 'core.lock.json': '{}\n', 'server/server.py': 'PORT = 8801\n' });
+  const claims = claimedPorts({ parent: base, self: join(base, 'b'), serveStatus: () => JSON.stringify({ TCP: { 443: { HTTPS: true } } }) });
+  assert.deepEqual([...claims].sort(), [443, 8800]);
+});
+
+test('parseServeStatus finds every port in tailscale serve status --json', () => {
+  const status = {
+    TCP: { 443: { HTTPS: true }, 8443: { HTTPS: true }, 5432: { TCPForward: '127.0.0.1:5433' } },
+    Web: {
+      'm.t.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:8765' } } },
+      'm.t.ts.net:8443': { Handlers: { '/': { Proxy: 'http://localhost:8766/' }, '/x': { Path: '/tmp' } } },
+    },
+  };
+  assert.deepEqual([...parseServeStatus(JSON.stringify(status))].sort((a, b) => a - b), [443, 5432, 5433, 8443, 8765, 8766]);
+  assert.deepEqual([...parseServeStatus('{}')], []);
+  assert.deepEqual([...parseServeStatus('')], [], 'nothing served');
+  assert.deepEqual([...parseServeStatus(null)], [], 'tailscale not there');
+  assert.throws(() => parseServeStatus('not json'), /tailscale serve status/);
+});
+
+test('pickPort skips claimed ports from 8765 up', () => {
+  assert.equal(pickPort(new Set()), 8765);
+  assert.equal(pickPort(new Set([8765, 8766, 8768])), 8767);
+});
+
+test('newApp refuses a bad port, or one another app already claims', (t) => {
+  const base = scratch(t);
+  put(join(base, 'old'), { 'core.lock.json': '{}\n', 'server/server.py': 'PORT = 8766\n' });
+  for (const port of [0, 80, 1023, 65536, 8766.5, Number.NaN]) {
+    assert.throws(() => newApp({ from: CORE, to: join(base, `p${port}`), id: 'pp', name: 'P', port, serveStatus: noServe }), /port/i, String(port));
+  }
+  assert.throws(() => newApp({ from: CORE, to: join(base, 'clash'), id: 'clash', name: 'Clash', port: 8766, serveStatus: noServe }), /8766 is taken/);
+  assert.throws(() => newApp({ from: CORE, to: join(base, 'clash2'), id: 'clash', name: 'Clash', port: 8770, serveStatus: () => '{"TCP":{"8770":{"HTTPS":true}}}' }), /8770 is taken/);
+  assert.ok(!existsSync(join(base, 'clash')), 'nothing is made when the port is refused');
+});
+
+test('the new-app command takes --port and prints the tailnet address on that port', (t) => {
+  const base = scratch(t);
+  const r = spawnSync(process.execPath, [join(CORE, 'tools/new-app.mjs'), join(base, 'cli'), '--id', 'cli', '--name', 'Cli', '--port', '9124'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(readFileSync(join(base, 'cli/server/server.py'), 'utf8'), /^PORT = 9124\b/m);
+  assert.match(r.stdout, /port 9124/);
+  assert.match(r.stdout, /tailscale serve --bg --https=9124 9124/);
+  const bad = spawnSync(process.execPath, [join(CORE, 'tools/new-app.mjs'), join(base, 'cli2'), '--id', 'cli2', '--port', 'abc'], { encoding: 'utf8' });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /port/i);
 });

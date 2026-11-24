@@ -1,6 +1,6 @@
 // Start a new app from this core:
 //
-//   npm run new-app -- ../trips --id trips --name "Trips" [--git]
+//   npm run new-app -- ../trips --id trips --name "Trips" [--port N] [--git]
 //
 // Copies the core (only the files git has: not its history, data, local
 // notes, caches or anything untracked) into a new
@@ -10,6 +10,14 @@
 // GitHub noreply address) copied over, and the git hooks in .githooks/ on
 // (npm run hooks does the same later, for an app made without --git).
 // Nothing is committed.
+//
+// Ports: each app gets its own, and its tailnet HTTPS port uses the same
+// number, so each app is its own origin with its own browser storage.
+// --port N picks one; without it the app gets the lowest port from 8765 up
+// that nothing claims. Claims are each sibling app's PORT line (an app is a
+// folder with core.lock.json; one without a PORT line runs on 8765) and every
+// port `tailscale serve status` uses. Never what is listening now: apps are
+// not always running.
 
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, appendFileSync, renameSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -25,6 +33,8 @@ const EXCLUDE = ['TASK.md', 'CLAUDE.local.md', '.local/'];
 // in an app would install the app's copy into other apps as if it were the core.
 const CORE_ONLY = ['tools/new-app.mjs', 'tools/install.mjs', 'test/new-app.test.js', 'test/install.test.js'];
 const CORE_ONLY_SCRIPTS = ['new-app', 'install-into'];
+const FIRST_PORT = 8765; // also the core server's default, for an app with no PORT line
+const PORT_RE = /^PORT = (\d+)\b/m;
 
 /** @param {string} s */
 const html = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -41,17 +51,108 @@ function replaceOnce(text, re, value, file) {
 }
 
 /**
- * @param {{ from: string, to: string, id?: string, name?: string, git?: boolean, email?: string | null }} opts
+ * The ports in `tailscale serve status --json` output: each served HTTPS or
+ * TCP port and each local port it forwards to.
+ * @param {string | null} text the output, or null when tailscale can't say
+ * @returns {Set<number>}
+ */
+export function parseServeStatus(text) {
+  /** @type {Set<number>} */
+  const ports = new Set();
+  if (!text?.trim()) return ports;
+  let status;
+  try {
+    status = JSON.parse(text);
+  } catch {
+    throw new Error("new-app: couldn't read `tailscale serve status --json`; pass --port N");
+  }
+  /** @param {unknown} v */
+  const add = (v) => {
+    const n = Number(v);
+    if (Number.isInteger(n) && n > 0 && n < 65536) ports.add(n);
+  };
+  /** @param {unknown} s */
+  const portOf = (s) => {
+    if (typeof s !== 'string') return;
+    const m = /:(\d+)(?:[/?#]|$)/.exec(s) ?? /^(\d+)$/.exec(s);
+    if (m) add(m[1]);
+    else if (/^https:/.test(s)) add(443);
+    else if (/^http:/.test(s)) add(80);
+  };
+  /** @param {unknown} node */
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'TCP' && v && typeof v === 'object') Object.keys(v).forEach(add);
+      else if (k === 'Web' && v && typeof v === 'object') Object.keys(v).forEach(portOf);
+      else if (k === 'Proxy' || k === 'TCPForward') portOf(v);
+      walk(v);
+    }
+  };
+  walk(status);
+  return ports;
+}
+
+/** @returns {string | null} `tailscale serve status --json` (read only), or null when tailscale can't say */
+function tailscaleServeStatus() {
+  try {
+    return execFileSync('tailscale', ['serve', 'status', '--json'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every port another app or `tailscale serve` claims.
+ * @param {{ parent: string, self?: string, serveStatus?: () => string | null }} opts
+ * @returns {Set<number>}
+ */
+export function claimedPorts({ parent, self, serveStatus = tailscaleServeStatus }) {
+  const claims = parseServeStatus(serveStatus());
+  const skip = self ? resolve(self) : null;
+  /** @type {string[]} */
+  let names = [];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    // no parent folder yet: no sibling apps
+  }
+  for (const n of names) {
+    const dir = resolve(parent, n);
+    if (dir === skip || !existsSync(join(dir, LOCK_FILE))) continue;
+    const launcher = join(dir, 'server/server.py');
+    const m = existsSync(launcher) ? PORT_RE.exec(readFileSync(launcher, 'utf8')) : null;
+    claims.add(m ? Number(m[1]) : FIRST_PORT);
+  }
+  return claims;
+}
+
+/** @param {Set<number>} claims @returns {number} the lowest port from 8765 up that nothing claims */
+export function pickPort(claims) {
+  let p = FIRST_PORT;
+  while (claims.has(p)) p++;
+  if (p > 65535) throw new Error('new-app: no free port; pass --port N');
+  return p;
+}
+
+/**
+ * @param {{ from: string, to: string, id?: string, name?: string, git?: boolean, email?: string | null, port?: number, serveStatus?: () => string | null }} opts
  * @returns {string} the new app's folder
  */
-export function newApp({ from, to, id, name, git = false, email = null }) {
+export function newApp({ from, to, id, name, git = false, email = null, port, serveStatus }) {
   if (!ID_RE.test(id ?? '')) throw new Error('The app id must be 2-40 lowercase letters, digits or dashes, starting with a letter.');
   name = String(name ?? '').trim();
   if (!name) throw new Error('The app name is required.');
+  if (port !== undefined && !(Number.isInteger(port) && port >= 1024 && port <= 65535)) {
+    throw new Error('The port must be a whole number from 1024 to 65535.');
+  }
   from = resolve(from);
   to = resolve(to);
   if (existsSync(to) && readdirSync(to).length) throw new Error(`${to} is not empty.`);
   if (to === from || to.startsWith(from + sep)) throw new Error('The new app must live outside the core folder.');
+  const claims = claimedPorts({ parent: dirname(to), self: to, serveStatus });
+  if (port !== undefined && claims.has(port)) throw new Error(`Port ${port} is taken (another app's PORT line or tailscale serve). Pick another, or leave out --port.`);
+  port ??= pickPort(claims);
 
   mkdirSync(to, { recursive: true });
   /** @param {string} rel */
@@ -87,6 +188,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
     s = replaceOnce(s, /^APP_VERSION = "[^"]*"/m, 'APP_VERSION = "0.1.0"', 'server.py');
     s = replaceOnce(s, /^DB_NAME = "[^"]*"/m, `DB_NAME = "${id}.db"`, 'server.py');
     s = replaceOnce(s, /^APP_ID = "[^"]*"/m, `APP_ID = "${id}"`, 'server.py');
+    s = replaceOnce(s, PORT_RE, `PORT = ${port}`, 'server.py');
     return replaceOnce(s, /description="(?:[^"\\]|\\.)*"/, `description=${JSON.stringify(`${name} sync server`)}`, 'server.py');
   });
   edit(f('app/manifest.webmanifest'), (s) => {
@@ -158,22 +260,27 @@ function coreEmail(from) {
 
 /** @param {string[]} argv */
 function cli(argv) {
-  /** @type {{ git: boolean, id?: string, name?: string }} */
+  /** @type {{ git: boolean, id?: string, name?: string, port?: number }} */
   const args = { git: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--id') args.id = argv[++i];
     else if (argv[i] === '--name') args.name = argv[++i];
-    else if (argv[i] === '--git') args.git = true;
+    else if (argv[i] === '--port') {
+      const v = argv[++i] ?? '';
+      if (!/^\d+$/.test(v)) throw new Error(`--port needs a number, not "${v}".`);
+      args.port = Number(v);
+    } else if (argv[i] === '--git') args.git = true;
     else rest.push(argv[i]);
   }
   if (rest.length !== 1) {
-    console.error('Usage: npm run new-app -- <folder> --id <storage-id> --name "<Display Name>" [--git]');
+    console.error('Usage: npm run new-app -- <folder> --id <storage-id> --name "<Display Name>" [--port N] [--git]');
     process.exit(2);
   }
   const from = fileURLToPath(new URL('..', import.meta.url));
-  const to = newApp({ from, to: rest[0], id: args.id, name: args.name ?? basename(rest[0]), git: args.git, email: args.git ? coreEmail(from) : null });
-  console.log(`Made ${to}. Next:\n  cd ${rest[0]}\n  npm install && npm test\nThen replace the example (app/js/notes.js, test/notes.test.js) with your app.`);
+  const to = newApp({ from, to: rest[0], id: args.id, name: args.name ?? basename(rest[0]), git: args.git, email: args.git ? coreEmail(from) : null, port: args.port });
+  const port = Number(PORT_RE.exec(readFileSync(join(to, 'server/server.py'), 'utf8'))?.[1]);
+  console.log(`Made ${to} on port ${port}. Next:\n  cd ${rest[0]}\n  npm install && npm test\nThen replace the example (app/js/notes.js, test/notes.test.js) with your app.\nOn the tailnet, the same number: tailscale serve --bg --https=${port} ${port}`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
