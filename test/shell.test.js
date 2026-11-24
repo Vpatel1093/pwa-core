@@ -34,6 +34,12 @@ test('server version matches the core version', () => {
   assert.equal(/^VERSION = "([^"]+)"/m.exec(py)?.[1], CORE_VERSION);
 });
 
+test("the app's server launcher names the same app id, so its database refuses another app", () => {
+  const py = readFileSync(new URL('../server/server.py', import.meta.url), 'utf8');
+  assert.equal(/^APP_ID = "([^"]+)"/m.exec(py)?.[1], APP_ID);
+  assert.match(py, /app_id=APP_ID/);
+});
+
 test("the app's server launcher reports the app version", () => {
   const py = readFileSync(new URL('../server/server.py', import.meta.url), 'utf8');
   assert.equal(/^APP_VERSION = "([^"]+)"/m.exec(py)?.[1], APP_VERSION);

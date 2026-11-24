@@ -46,7 +46,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-VERSION = "0.1.2"  # core version; matches app/core/version.js (a test checks)
+VERSION = "0.1.3"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
 DEFAULT_STATIC = ROOT / "app"
@@ -77,10 +77,14 @@ class DatabaseProblem(Exception):
     """The database file is damaged or isn't a database."""
 
 
+class WrongApp(Exception):
+    """The database belongs to another app."""
+
+
 class EventStore:
     """Append-only event table. `seq` is a local cursor for paging; `id` is the event's own id."""
 
-    def __init__(self, path):
+    def __init__(self, path, app_id=None):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -112,6 +116,16 @@ class EventStore:
         # Identifies this database. If it changes (restored or recreated), clients
         # restart their pull cursor and push everything they have again.
         self.server_id = self._db.execute("SELECT value FROM meta WHERE key = 'server_id'").fetchone()[0]
+        # Which app this database is for. A database from before app ids takes
+        # the first one it is opened with.
+        if app_id is not None:
+            self._db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('app_id', ?)", (app_id,))
+            self._db.commit()
+        row = self._db.execute("SELECT value FROM meta WHERE key = 'app_id'").fetchone()
+        self.app_id = row[0] if row else None
+        if app_id is not None and self.app_id != app_id:
+            self._db.close()
+            raise WrongApp(f"{path} holds the events of app '{self.app_id}', not '{app_id}'")
 
     def insert(self, events):
         with self._lock, self._db:
@@ -140,6 +154,7 @@ class EventStore:
             "next": rows[-1][0] if rows else after,
             "more": more,
             "server_id": self.server_id,
+            "app_id": self.app_id,
             # A client whose cursor is past head is talking to an older copy
             # of this database (restored from backup) and starts over.
             "head": head,
@@ -305,6 +320,18 @@ class Handler(SimpleHTTPRequestHandler):
                     pass
             self.close_connection = True
 
+    def refuse_other_app(self, query):
+        """A client names its app (?app=<id>); one of another app is refused, so
+        its events can't mix into this app's for good. Older clients don't name it."""
+        claimed = parse_qs(query).get("app", [None])[0]
+        if claimed is None or self.store.app_id is None or claimed == self.store.app_id:
+            return False
+        self.send_json(
+            HTTPStatus.CONFLICT,
+            {"error": f"this server is for app '{self.store.app_id}', not '{claimed}'", "app_id": self.store.app_id},
+        )
+        return True
+
     def do_GET(self):
         if self.refuse_foreign():
             return
@@ -314,9 +341,17 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path == "/api/health":
             return self.send_json(
                 HTTPStatus.OK,
-                {"ok": True, "version": self.app_version, "core_version": VERSION, "server_id": self.store.server_id},
+                {
+                    "ok": True,
+                    "version": self.app_version,
+                    "core_version": VERSION,
+                    "server_id": self.store.server_id,
+                    "app_id": self.store.app_id,
+                },
             )
         if url.path == "/api/events":
+            if self.refuse_other_app(url.query):
+                return
             q = parse_qs(url.query)
             try:
                 after = min(max(int(q.get("after", ["0"])[0]), 0), MAX_CURSOR)
@@ -334,7 +369,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.refuse_foreign():
             return
-        if urlsplit(self.path).path != "/api/events":
+        url = urlsplit(self.path)
+        if url.path != "/api/events":
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         header = self.headers.get("Content-Length")
         if header is None:
@@ -355,6 +391,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.close_connection = True
             return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
         raw = self.rfile.read(length)
+        if self.refuse_other_app(url.query):
+            return
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ctype != "application/json":
             return self.send_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "use application/json"})
@@ -381,8 +419,8 @@ class Handler(SimpleHTTPRequestHandler):
         )
 
 
-def make_server(host, port, db_path, static_dir, allowed_hosts=(), quiet=False, app_version=VERSION):
-    store = EventStore(db_path)
+def make_server(host, port, db_path, static_dir, allowed_hosts=(), quiet=False, app_version=VERSION, app_id=None):
+    store = EventStore(db_path, app_id=app_id)
     extra = frozenset(h.strip().lower() for h in allowed_hosts)
     handler = partial(
         Handler, store=store, allowed_hosts=extra, quiet=quiet, app_version=app_version, directory=str(static_dir)
@@ -412,8 +450,10 @@ def parse_args(argv=None, *, db_name=DEFAULT_DB_NAME, description="Local-first a
     return p.parse_args(argv)
 
 
-# db_name and app_version come from the app's server/server.py.
-def main(argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, description="Local-first app sync server"):
+# db_name, app_version and app_id come from the app's server/server.py.
+def main(
+    argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, app_id=None, description="Local-first app sync server"
+):
     args = parse_args(argv, db_name=db_name, description=description)
     try:
         tailnet = tailnet_name()
@@ -424,7 +464,10 @@ def main(argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, description
             DEFAULT_STATIC,
             args.allow_host + ([tailnet] if tailnet else []),
             app_version=app_version,
+            app_id=app_id,
         )
+    except WrongApp as err:
+        sys.exit(f"{err}. Give each app its own database (--db) and port.")
     except DatabaseProblem as err:
         sys.exit(
             f"{args.db} is damaged ({err}).\n"

@@ -137,6 +137,7 @@ async function init() {
     store,
     appVersion: APP_VERSION,
     eventVersion: EVENT_VERSION,
+    appId: APP_ID,
     channel: typeof BroadcastChannel === 'function' ? new BroadcastChannel(`${APP_ID}-events`) : null,
     onEvents: (events) => {
       for (const e of events) applyEvent(app.notes, e);

@@ -32,6 +32,7 @@ test('newApp copies the core and sets the name and storage id everywhere', (t) =
   assert.match(read('app/index.html'), /<title>Trips &quot;beta&quot; &amp; co<\/title>/);
   assert.equal(JSON.parse(read('package.json')).name, 'trips');
   assert.match(read('server/server.py'), /^DB_NAME = "trips\.db"/m);
+  assert.match(read('server/server.py'), /^APP_ID = "trips"/m);
   assert.match(read('server/server.py'), /description="Trips \\"beta\\" & co sync server"/);
   assert.match(read('README.md'), /^# Trips "beta" & co/);
   assert.ok(existsSync(join(to, 'docs/core.md')), 'the core README comes along as docs/core.md');

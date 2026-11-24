@@ -8,6 +8,7 @@ from pwacore.server import main
 
 APP_VERSION = "0.1.0"  # matches APP_VERSION in app/js/config.js (a test checks)
 DB_NAME = "events.db"  # data/<DB_NAME>; keep it once there is data
+APP_ID = "pwacore-demo"  # matches APP_ID in app/js/config.js (a test checks); the database keeps it
 
 if __name__ == "__main__":
-    main(db_name=DB_NAME, app_version=APP_VERSION, description="PWA Core Demo sync server")
+    main(db_name=DB_NAME, app_version=APP_VERSION, app_id=APP_ID, description="PWA Core Demo sync server")

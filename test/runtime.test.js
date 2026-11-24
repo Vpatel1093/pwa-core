@@ -213,3 +213,13 @@ test('other tabs on the same device get recorded, synced, and imported events', 
   a.rt.close();
   b.rt.close();
 });
+
+test("the runtime's sync names the app, so another app's server refuses it", async () => {
+  const srv = fakeServer({ appId: 'trips' });
+  const { rt, statuses } = await boot({ srv, appId: 'notes' });
+  await rt.record(note(rt));
+  await rt.runSync();
+  assert.equal(srv.rows.length, 0);
+  assert.match(String(statuses.at(-1)?.error ?? ''), /not 'notes'/);
+  rt.close();
+});

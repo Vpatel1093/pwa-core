@@ -69,6 +69,7 @@ class EventStoreTest(unittest.TestCase):
                 "next": third["next"],
                 "more": False,
                 "server_id": self.store.server_id,
+                "app_id": None,
                 "head": third["next"],
             },
         )
@@ -189,6 +190,79 @@ class AppSettingsTest(unittest.TestCase):
     def test_the_launcher_runs_the_core(self):
         launcher = (Path(__file__).parent / "server.py").read_text()
         self.assertIn("from pwacore.server import main", launcher)
+
+
+class AppIdTest(unittest.TestCase):
+    """Each app has its own server. The database remembers which app it is for,
+    so a second app's client pointed at the wrong server can't mix its events
+    in (union merge would keep them for good)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "e.db"
+
+    def open(self, app_id=None):
+        store = server.EventStore(self.path, app_id=app_id)
+        self.addCleanup(store.close)
+        return store
+
+    def test_the_database_keeps_the_app_id_and_refuses_another_app(self):
+        self.open("trips").close()
+        self.assertEqual(self.open("trips").app_id, "trips")
+        self.assertEqual(self.open().app_id, "trips", "opening without an id keeps the stored one")
+        with self.assertRaises(server.WrongApp) as caught:
+            self.open("notes")
+        self.assertIn("trips", str(caught.exception))
+        self.assertIn("notes", str(caught.exception))
+
+    def test_a_database_from_before_app_ids_takes_the_app_id(self):
+        self.open().close()
+        self.assertIsNone(self.open().app_id)
+        self.assertEqual(self.open("mandalart").app_id, "mandalart")
+
+    def serve(self, app_id):
+        httpd = server.make_server("127.0.0.1", 0, self.path, Path(self.tmp.name), quiet=True, app_id=app_id)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        def stop():
+            httpd.shutdown()
+            httpd.server_close()
+            httpd.store.close()
+
+        self.addCleanup(stop)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+        def request(method, path, body=None):
+            data = None if body is None else json.dumps(body).encode()
+            req = urllib.request.Request(base + path, data=data, method=method)
+            if data is not None:
+                req.add_header("Content-Type", "application/json")
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as err:
+                return err.code, json.loads(err.read())
+
+        return request
+
+    def test_a_client_of_another_app_is_refused(self):
+        request = self.serve("trips")
+        status, body = request("POST", "/api/events?app=notes", {"events": [ev(1)]})
+        self.assertEqual(status, 409)
+        self.assertIn("trips", body["error"])
+        status, body = request("GET", "/api/events?after=0&app=notes")
+        self.assertEqual(status, 409)
+        status, body = request("GET", "/api/events?after=0&app=trips")
+        self.assertEqual((status, body["events"], body["app_id"]), (200, [], "trips"), "nothing got in")
+
+    def test_the_right_app_and_older_clients_get_through(self):
+        request = self.serve("trips")
+        self.assertEqual(request("POST", "/api/events?app=trips", {"events": [ev(1)]})[1]["inserted"], 1)
+        self.assertEqual(request("POST", "/api/events", {"events": [ev(2)]})[1]["inserted"], 1, "no app: older client")
+        status, body = request("GET", "/api/events?after=0")
+        self.assertEqual((status, len(body["events"])), (200, 2))
+        self.assertEqual(request("GET", "/api/health")[1]["app_id"], "trips")
 
 
 class ValidationTest(unittest.TestCase):

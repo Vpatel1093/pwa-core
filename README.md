@@ -72,7 +72,7 @@ To use it on your phone, put it on your tailnet with HTTPS:
 tailscale serve --bg 8765
 ```
 
-Open the `https://<machine>.<tailnet>.ts.net` address and use Add to Home Screen. HTTPS is required for offline use and install. Use `tailscale serve`, never `tailscale funnel` (that would put it on the public internet). Give each app its own port.
+Open the `https://<machine>.<tailnet>.ts.net` address and use Add to Home Screen. HTTPS is required for offline use and install. Use `tailscale serve`, never `tailscale funnel` (that would put it on the public internet). Give each app its own port, and for a second app its own HTTPS port too: `tailscale serve --https=8443 --bg 8766`, then open `https://<machine>.<tailnet>.ts.net:8443`. Each app's database keeps its app id and refuses another app's client.
 
 ## Checks
 

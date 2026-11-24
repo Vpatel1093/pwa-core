@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 // head, per-event rejects. test/integration.test.js runs the real one.
 /** @typedef {import('../../app/core/events.js').PwaEvent} PwaEvent */
 
-/** @param {{ pageSize?: number, serverId?: string, rejectIds?: string[] }} [opts] */
-export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [] } = {}) {
+/** @param {{ pageSize?: number, serverId?: string, rejectIds?: string[], appId?: string | null }} [opts] */
+export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [], appId = null } = {}) {
   /** @type {PwaEvent[]} */
   const rows = [];
   const ids = new Set();
@@ -25,6 +25,10 @@ export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [] 
       const u = new URL(url, 'http://x');
       /** @param {number} status @param {unknown} body */
       const reply = (status, body) => ({ ok: status < 300, status, json: async () => body });
+      const claimed = u.searchParams.get('app');
+      if (u.pathname === '/api/events' && claimed && appId && claimed !== appId) {
+        return reply(409, { error: `this server is for app '${appId}', not '${claimed}'`, app_id: appId });
+      }
       if (opts.method === 'POST' && u.pathname === '/api/events') {
         assert.equal(/** @type {Record<string, string>} */ (opts.headers)['Content-Type'], 'application/json');
         srv.posts++;
@@ -53,6 +57,7 @@ export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [] 
           next: after + slice.length,
           more: after + slice.length < rows.length,
           server_id: srv.serverId,
+          app_id: appId,
           head: rows.length,
         });
       }

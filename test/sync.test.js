@@ -26,13 +26,13 @@ function buildFlags(events) {
 /** @param {ReturnType<typeof buildFlags>} flags @param {string} key */
 const isOn = (flags, key) => flags.get(key)?.value === true;
 
-/** @param {string} id @param {ReturnType<typeof fakeServer>} srv */
-function device(id, srv) {
+/** @param {string} id @param {ReturnType<typeof fakeServer>} srv @param {string} [appId] */
+function device(id, srv, appId) {
   let t = 1000;
   const clock = createClock({ now: () => t });
   const ctx = { clock, deviceId: id, appVersion: 'test', tz: 'UTC', now: () => t };
   const store = createMemoryStore();
-  const sync = createSync({ store, clock, fetch: srv.fetch, now: () => t });
+  const sync = createSync({ store, clock, fetch: srv.fetch, now: () => t, appId });
   return {
     ctx, clock, store, sync,
     /** @param {number} ms */
@@ -343,4 +343,27 @@ test('lastSyncAt is recorded after a successful sync', async () => {
   a.at(123456);
   await a.sync.syncOnce();
   assert.equal(await a.store.getMeta('lastSyncAt'), 123456);
+});
+
+test('a device of another app is refused, and nothing it has reaches that server', async () => {
+  const srv = fakeServer({ appId: 'trips' });
+  const a = device('a', srv, 'notes');
+  await a.tick('k');
+  await assert.rejects(a.sync.syncOnce(), /this server is for app 'trips', not 'notes'/);
+  assert.equal(srv.rows.length, 0);
+  assert.equal(await a.store.outboxCount(), 1, 'the event stays queued for the right server');
+});
+
+test('a device of the right app syncs, and every request names the app', async () => {
+  const srv = fakeServer({ appId: 'trips' });
+  /** @type {string[]} */
+  const urls = [];
+  const fetch = srv.fetch;
+  srv.fetch = (url, opts) => { urls.push(url); return fetch(url, opts); };
+  const a = device('a', srv, 'trips');
+  await a.tick('k');
+  const r = await a.sync.syncOnce();
+  assert.equal(r.pushError, null);
+  assert.equal(srv.rows.length, 1);
+  assert.ok(urls.length >= 2 && urls.every((u) => new URL(u, 'http://x').searchParams.get('app') === 'trips'), urls.join(' '));
 });

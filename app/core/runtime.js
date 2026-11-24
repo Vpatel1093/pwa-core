@@ -38,6 +38,7 @@ const SYNC_DEBOUNCE_MS = 1500; // after a write, so a burst of writes is one pus
  *   eventVersion?: number,
  *   fetch?: import('./sync.js').FetchLike,
  *   base?: string,
+ *   appId?: string,
  *   now?: () => number,
  *   tz?: string,
  *   channel?: BroadcastChannel | null,
@@ -52,6 +53,7 @@ export async function startRuntime({
   eventVersion = 1,
   fetch,
   base = '',
+  appId, // named on every sync request, so another app's server refuses this one
   now = () => Date.now(),
   tz = Intl.DateTimeFormat().resolvedOptions().timeZone,
   channel = null, // a BroadcastChannel shared by this app's tabs
@@ -67,7 +69,7 @@ export async function startRuntime({
   const clock = createClock({ now, last: await store.getMeta('clockLast', 0) });
   const loaded = await store.allEvents();
   for (const e of loaded) clock.observe(e.ts);
-  const sync = createSync({ store, clock, now, base, ...(fetch ? { fetch } : {}) });
+  const sync = createSync({ store, clock, now, base, appId, ...(fetch ? { fetch } : {}) });
 
   /** @type {SyncStatus} */
   const status = {

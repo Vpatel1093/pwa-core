@@ -26,14 +26,18 @@ const MAX_REJECTED_KEPT = 100;
  *   clock: import('./clock.js').Clock,
  *   fetch?: FetchLike,
  *   base?: string,
+ *   appId?: string,
  *   now?: () => number,
  *   timeoutMs?: number,
  * }} opts
+ * appId names this app on every request, so a server of another app refuses
+ * it (409) instead of mixing the two apps' events for good.
  */
 export function createSync({
-  store, clock, fetch: fetchFn = globalThis.fetch.bind(globalThis), base = '', now = () => Date.now(),
+  store, clock, fetch: fetchFn = globalThis.fetch.bind(globalThis), base = '', appId, now = () => Date.now(),
   timeoutMs = REQUEST_TIMEOUT_MS,
 }) {
+  const app = appId ? `app=${encodeURIComponent(appId)}` : '';
   /** @type {Promise<SyncResult> | null} */
   let running = null;
 
@@ -76,7 +80,7 @@ export function createSync({
     for (;;) {
       const batch = fitBatch(await store.outbox(PUSH_BATCH));
       if (!batch.length) return pushed;
-      const reply = await request(`${base}/api/events`, {
+      const reply = await request(`${base}/api/events${app ? `?${app}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ events: batch }),
@@ -110,7 +114,7 @@ export function createSync({
     let after = await store.getMeta('pullCursor', 0);
     const knownServer = await store.getMeta('serverId', null);
     for (;;) {
-      const page = await request(`${base}/api/events?after=${after}&limit=${PULL_PAGE}`);
+      const page = await request(`${base}/api/events?after=${after}&limit=${PULL_PAGE}${app ? `&${app}` : ''}`);
       checkPage(page);
       const replaced = page.server_id && knownServer !== null && page.server_id !== knownServer;
       // Cursor past the end: the server is an older copy (restored backup).

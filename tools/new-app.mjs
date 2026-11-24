@@ -79,6 +79,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
   edit(f('server/server.py'), (s) => {
     s = replaceOnce(s, /^APP_VERSION = "[^"]*"/m, 'APP_VERSION = "0.1.0"', 'server.py');
     s = replaceOnce(s, /^DB_NAME = "[^"]*"/m, `DB_NAME = "${id}.db"`, 'server.py');
+    s = replaceOnce(s, /^APP_ID = "[^"]*"/m, `APP_ID = "${id}"`, 'server.py');
     return replaceOnce(s, /description="(?:[^"\\]|\\.)*"/, `description=${JSON.stringify(`${name} sync server`)}`, 'server.py');
   });
   edit(f('app/manifest.webmanifest'), (s) => {
