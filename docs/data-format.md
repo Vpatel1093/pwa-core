@@ -16,7 +16,7 @@ The core sets the event envelope (below) and its own stores. It never sets the s
 |---|---|---|
 | browser, IndexedDB database named `APP_ID` | `events` | the full log |
 | | `outbox` | ids of local events not pushed yet |
-| | `meta` | the core's own keys: device id, clock, sync cursor, last sync and export times, rejected events |
+| | `meta` | the core's own keys (`deviceId`, `clockLast`, `serverId`, `pullCursor`, `pullCursorId`, `lastSyncAt`, `lastExportAt`, `rejected`); a newer core may add more |
 | server, `data/<DB_NAME>` (SQLite) | `events` | the log, in the order the server stored it |
 | | `meta` | `server_id`, `app_id` |
 
