@@ -104,7 +104,7 @@ npm run install-into -- ../<app>     # copies the three folders, removes dropped
 cd ../<app> && npm test
 ```
 
-It refuses to overwrite a copy that was edited by hand, or files in those folders that the lock doesn't list (`--force` overrides). The lock names this repo's commit, or `null` with `uncommitted: true` before the first commit; `tree_sha256` identifies the copy either way. `CORE_VERSION` says which core an app has.
+It refuses to overwrite a copy that was edited by hand, or files in those folders that the lock doesn't list (`--force` overrides). The lock names this repo's commit, or `null` with `uncommitted: true` before the first commit; `tree_sha256` identifies the copy either way. It refuses to install uncommitted changes to the vendored folders unless you pass `--uncommitted`, since the commit in the lock wouldn't hold that copy. `CORE_VERSION` says which core an app has.
 
 ## Where it came from
 

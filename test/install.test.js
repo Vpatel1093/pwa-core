@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installCore, coreFiles, VENDORED } from '../tools/install.mjs';
-import { checkLock, LOCK_FILE } from '../tools/pwacore/lock.mjs';
+import { checkLock, LOCK_FILE, sha256 } from '../tools/pwacore/lock.mjs';
 
 const CORE = fileURLToPath(new URL('..', import.meta.url));
 
@@ -92,6 +92,28 @@ test('checkLock catches a hand edit, a missing file and an added file', (t) => {
     'tools/pwacore/lock.mjs is missing',
     'server/pwacore/mine.py is not part of the core: app code goes outside app/core, server/pwacore and tools/pwacore',
   ]);
+});
+
+test('checkLock catches a lock whose file hashes were rewritten by hand', (t) => {
+  const app = fakeApp(t);
+  installCore({ from: fakeCore(t), to: app, source: { commit: 'abc' } });
+  writeFileSync(join(app, 'app/core/a.js'), 'export const a = 2;\n');
+  const lock = JSON.parse(readFileSync(join(app, LOCK_FILE), 'utf8'));
+  lock.files['app/core/a.js'] = sha256(readFileSync(join(app, 'app/core/a.js')));
+  writeFileSync(join(app, LOCK_FILE), JSON.stringify(lock));
+  assert.deepEqual(checkLock(app), [`${LOCK_FILE} was edited by hand: its tree_sha256 doesn't match its files`]);
+});
+
+test('installCore refuses a core with uncommitted changes unless asked', (t) => {
+  const app = fakeApp(t);
+  const core = fakeCore(t);
+  assert.throws(
+    () => installCore({ from: core, to: app, source: { commit: 'abc', uncommitted: true }, allowUncommitted: false }),
+    /uncommitted changes.*--uncommitted/s,
+  );
+  assert.ok(!existsSync(join(app, LOCK_FILE)), 'nothing was installed');
+  installCore({ from: core, to: app, source: { commit: 'abc', uncommitted: true }, allowUncommitted: true });
+  assert.deepEqual(checkLock(app), []);
 });
 
 test('checkLock ignores bytecode and dotfiles', (t) => {

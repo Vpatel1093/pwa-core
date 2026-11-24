@@ -32,11 +32,18 @@ function removeEmptyDirs(dir) {
 
 /** @typedef {{ commit?: string | null, uncommitted?: boolean }} Source */
 
-/** @param {{ from: string, to: string, source?: Source, force?: boolean }} opts */
-export function installCore({ from, to, source = {}, force = false }) {
+/**
+ * allowUncommitted: install a core with uncommitted changes. The lock then
+ * names a commit that doesn't hold the copy, so the CLI asks for --uncommitted.
+ * @param {{ from: string, to: string, source?: Source, force?: boolean, allowUncommitted?: boolean }} opts
+ */
+export function installCore({ from, to, source = {}, force = false, allowUncommitted = true }) {
   from = resolve(from);
   to = resolve(to);
   if (from === to) throw new Error('Refusing to install the core into itself.');
+  if (source.uncommitted && !allowUncommitted) {
+    throw new Error('The core has uncommitted changes in its vendored folders: commit them first, or pass --uncommitted\n(the lock then says uncommitted: true, and its commit does not hold this copy).');
+  }
   if (!force) {
     const problems = existsSync(join(to, LOCK_FILE)) ? checkLock(to) : listVendored(to).map((f) => `${f} is not part of the core (there is no ${LOCK_FILE} yet)`);
     if (problems.length) throw new Error(`Not installing; pass --force to overwrite:\n  ${problems.join('\n  ')}`);
@@ -72,14 +79,15 @@ export function gitSource(from) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
   const force = args.includes('--force');
-  const rest = args.filter((a) => a !== '--force');
+  const allowUncommitted = args.includes('--uncommitted');
+  const rest = args.filter((a) => a !== '--force' && a !== '--uncommitted');
   if (rest.length !== 1) {
-    console.error('Usage: npm run install-into -- <app-folder> [--force]');
+    console.error('Usage: npm run install-into -- <app-folder> [--force] [--uncommitted]');
     process.exit(2);
   }
   const from = fileURLToPath(new URL('..', import.meta.url));
   try {
-    const lock = installCore({ from, to: rest[0], source: gitSource(from), force });
+    const lock = installCore({ from, to: rest[0], source: gitSource(from), force, allowUncommitted });
     console.log(`Installed pwa-core ${lock.core_version} (${Object.keys(lock.files).length} files, commit ${lock.source.commit ?? 'none yet'}) into ${rest[0]}.`);
   } catch (err) {
     console.error(/** @type {Error} */ (err).message);

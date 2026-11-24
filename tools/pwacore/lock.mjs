@@ -55,9 +55,11 @@ export function checkLock(root) {
   root = resolve(root);
   const lockPath = join(root, LOCK_FILE);
   if (!existsSync(lockPath)) return [`${LOCK_FILE} is missing: install the core with pwa-core's tools/install.mjs`];
-  /** @type {{ files?: FileHashes }} */
+  /** @type {{ files?: FileHashes, tree_sha256?: string }} */
   const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
   const problems = [];
+  // A hand edit to the lock's file list shows as a tree hash that no longer matches it.
+  if (lock.tree_sha256 !== treeHash(lock.files ?? {})) return [`${LOCK_FILE} was edited by hand: its tree_sha256 doesn't match its files`];
   for (const [f, hash] of Object.entries(lock.files ?? {})) {
     if (!existsSync(join(root, f))) problems.push(`${f} is missing`);
     else if (sha256(readFileSync(join(root, f))) !== hash) problems.push(`${f} was edited by hand: change it in pwa-core and install again`);
