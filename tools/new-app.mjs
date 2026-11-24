@@ -10,7 +10,7 @@
 // (npm run hooks does the same later, for an app made without --git).
 // Nothing is committed.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +20,10 @@ import { gitSource } from './install.mjs';
 const SKIP_TOP = new Set(['.git', 'node_modules', 'data', 'dist', '.local', 'TASK.md', 'CLAUDE.local.md', '.runner-done']);
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
 const EXCLUDE = ['TASK.md', 'CLAUDE.local.md', '.local/'];
+// Only pwa-core starts apps and installs the core into them. A copy of these
+// in an app would install the app's copy into other apps as if it were the core.
+const CORE_ONLY = ['tools/new-app.mjs', 'tools/install.mjs', 'test/new-app.test.js', 'test/install.test.js'];
+const CORE_ONLY_SCRIPTS = ['new-app', 'install-into'];
 
 /** @param {string} s */
 const html = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -62,6 +66,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
 
   /** @param {string} p */
   const f = (p) => join(to, p);
+  for (const p of CORE_ONLY) rmSync(f(p), { force: true });
   edit(f('app/js/config.js'), (s) => {
     s = replaceOnce(s, /export const APP_NAME = .*;/, `export const APP_NAME = ${JSON.stringify(name)};`, 'config.js');
     s = replaceOnce(s, /export const APP_ID = .*;/, `export const APP_ID = '${id}';`, 'config.js');
@@ -88,7 +93,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
   edit(f('package.json'), (s) => {
     const p = JSON.parse(s);
     Object.assign(p, { name: id, version: '0.1.0', description: name });
-    delete p.scripts?.['new-app'];
+    for (const script of CORE_ONLY_SCRIPTS) delete p.scripts?.[script];
     return `${JSON.stringify(p, null, 2)}\n`;
   });
   // The core README describes the core; the new app gets its own.

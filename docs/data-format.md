@@ -49,4 +49,8 @@ If `server_id` changes (a new database) or the cursor is past `head` (a restored
 
 ## Changing a body shape
 
-Never migrate stored events. Bump `EVENT_VERSION`, and teach the state code to read both shapes. Old exports keep importing.
+Never migrate stored events. Old exports keep importing.
+
+- A new field: make it optional, and have the state code read events without it.
+- A new shape: give it a new type name (`note.moved2`, or a better name), and have the state code read both types.
+- `EVENT_VERSION` (the envelope's `v`) is app-wide, not per type. A device that is behind keeps events with a higher `v` but doesn't fold any of them, so a bump hides every new event from an older copy of the app until it updates. Bump it only for a change that every event shares, never for one type's body.

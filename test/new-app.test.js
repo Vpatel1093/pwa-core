@@ -93,6 +93,25 @@ test('a new app starts with lint and the git hooks: configs, scripts, pinned ESL
   }
 });
 
+test('a new app leaves out the core-only tools and gets the lock test, which catches a hand edit', (t) => {
+  const to = join(scratch(t), 'locked');
+  newApp({ from: CORE, to, id: 'locked', name: 'Locked' });
+  for (const f of ['tools/new-app.mjs', 'tools/install.mjs', 'test/new-app.test.js', 'test/install.test.js']) {
+    assert.ok(!existsSync(join(to, f)), `${f} is core-only`);
+  }
+  const pkg = JSON.parse(readFileSync(join(to, 'package.json'), 'utf8'));
+  assert.equal(pkg.scripts['install-into'], undefined, 'install-into is core-only');
+  assert.equal(pkg.scripts['new-app'], undefined, 'new-app is core-only');
+  const { NODE_TEST_CONTEXT, ...env } = process.env;
+  const run = () => spawnSync(process.execPath, ['--test', '--test-reporter=tap', 'test/core-lock.test.js'], { cwd: to, encoding: 'utf8', env });
+  const ok = run();
+  assert.match(ok.stdout, /# pass 1/, 'the lock test runs and passes in the app');
+  writeFileSync(join(to, 'app/core/uuid.js'), `${readFileSync(join(to, 'app/core/uuid.js'), 'utf8')}// hand edit\n`);
+  const bad = run();
+  assert.notEqual(bad.status, 0, 'a hand edit to the vendored core fails the app\'s tests');
+  assert.match(bad.stdout, /app\/core\/uuid\.js/);
+});
+
 test('newApp leaves out local, generated and private files', (t) => {
   const from = scratch(t);
   for (const f of ['app/js/config.js', 'app/sw.js', 'app/manifest.webmanifest', 'app/index.html', 'server/server.py', 'package.json', 'README.md']) {

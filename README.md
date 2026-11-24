@@ -45,7 +45,8 @@ Then make it your app:
 | `server/pwacore/` | Sync server and static file server | The core |
 | `server/server.py` | Starts the server with the app's database name and version | The app |
 | `tools/pwacore/` | `build`, `check`, `lint`, the vendored-copy lock check | The core |
-| `tools/new-app.mjs`, `tools/install.mjs` | Start an app; install the core into one (core only) | The core |
+| `tools/new-app.mjs`, `tools/install.mjs` | Start an app; install the core into one. A new app leaves them (and their tests and scripts) out | The core only |
+| `test/core-lock.test.js` | In an app: fails if the vendored core doesn't match `core.lock.json` | The app gets it |
 | `tsconfig.json`, `tsconfig.sw.json` | The type check (see Checks). A new app gets them | The app |
 | `eslint.config.js`, `ruff.toml`, `.githooks/` | Lint and the git hooks (see Checks). A new app gets them | The app |
 | `core.lock.json` | In an app: the core version and source, and a sha256 per vendored file | Written by `install.mjs` |
@@ -90,13 +91,13 @@ Tests need Node 20+ (`npm install` once for TypeScript, ESLint and the test-only
 
 **Lint.** ESLint's recommended rules plus some that catch real bugs (`eqeqeq`, unused variables, promise executor returns, shadowing and others: `eslint.config.js`). ruff checks `server/` and `tools/` for likely bugs (pyflakes, bugbear) and that they are formatted (`ruff format`). Fix a finding in the code; a disable comment carries a reason (`// eslint-disable-next-line rule -- why`). ESLint can't see a promise that is never awaited in JSDoc JS here (that needs typescript-eslint, which doesn't run on TypeScript 7).
 
-**Git hooks.** `npm run hooks` sets `core.hooksPath` to `.githooks/` (`new-app --git` does it for you). `pre-commit` lints the staged files and type-checks if JS is staged: a few seconds. `pre-merge-commit` runs the same for a merge that commits on its own. `pre-push` runs `npm run check` and `npm test`. Both unset git's repo variables (`GIT_DIR`, `GIT_INDEX_FILE` and the rest) first, so a test that runs git can't write into this repo. `--no-verify` skips them once.
+**Git hooks.** `npm run hooks` sets `core.hooksPath` to `.githooks/` (`new-app --git` does it for you). `pre-commit` lints the staged files and type-checks if JS is staged: a few seconds. `pre-merge-commit` runs the same for a merge that commits on its own. `pre-push` runs `npm run check` and `npm test`. Each unsets git's repo variables (`GIT_DIR`, `GIT_INDEX_FILE` and the rest) first, so a test that runs git can't write into this repo. `--no-verify` skips them once.
 
 **Releasing a change:** bump `APP_VERSION` in `app/js/config.js`, `VERSION` in `app/sw.js` and `APP_VERSION` in `server/server.py` (a test checks they match). Installed copies keep the old code until you bump, then show a "new version" banner. A change to `app/core/` or `server/` also bumps `CORE_VERSION` in `app/core/version.js` and `VERSION` in `server/pwacore/server.py`.
 
 ## Updating an app's core
 
-An app holds a vendored copy of the core in `app/core/`, `server/pwacore/` and `tools/pwacore/`, and a `core.lock.json` with a sha256 per file. Its tests run the lock check (`checkLock` from `tools/pwacore/lock.mjs`), so a hand edit fails the suite. A fix the core needs is made here, with its tests, then installed again:
+An app holds a vendored copy of the core in `app/core/`, `server/pwacore/` and `tools/pwacore/`, and a `core.lock.json` with a sha256 per file. Its `test/core-lock.test.js` (new-app adds it) runs the lock check (`checkLock` from `tools/pwacore/lock.mjs`), so a hand edit fails the suite. A fix the core needs is made here, with its tests, then installed again:
 
 ```sh
 npm run install-into -- ../<app>     # copies the three folders, removes dropped files, writes the lock
