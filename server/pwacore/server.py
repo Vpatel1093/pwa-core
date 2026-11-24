@@ -17,6 +17,9 @@ API
                                                     "server_id": id, "head": highest cursor,
                                                     "after_id": id of the event at the cursor}
 
+An app adds its own routes under /api/app/ and CSP sources: main(routes=, csp=),
+see make_server and README "App routes and CSP".
+
 Events are deduplicated by id; the first copy of an id is kept. A push stores
 every acceptable event and lists the rest in "rejected" (retrying won't help
 them), so one bad event can't block a device's sync.
@@ -36,17 +39,20 @@ origin are refused.
 import argparse
 import json
 import queue
+import re
 import sqlite3
 import subprocess
 import sys
 import threading
 import traceback
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Callable, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
 VERSION = "0.1.4"  # core version; matches app/core/version.js (a test checks)
@@ -66,17 +72,124 @@ DEFAULT_PAGE = 500
 MAX_CONNECTIONS = 64  # open at once; each holds a thread (a browser opens about 6)
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
+# The base CSP, in order. An app may add sources to the fetch directives in
+# CSP_EXTENDABLE (one it doesn't have yet starts from 'self'); the rest are locked.
+BASE_CSP = (
+    ("default-src", ("'self'",)),
+    ("img-src", ("'self'", "data:", "blob:")),
+    ("object-src", ("'none'",)),
+    ("base-uri", ("'none'",)),
+    ("form-action", ("'none'",)),
+    ("frame-ancestors", ("'none'",)),
+)
+# No script-src (a script from elsewhere can do anything the app can) and no
+# worker-src (workers must be same-origin anyway). Loosen only with a reason.
+CSP_EXTENDABLE = ("img-src", "connect-src", "font-src", "media-src", "style-src", "frame-src")
+# An https origin, optionally with a leading *. and a port: nothing that could
+# end the directive (; or a space) or widen it (a keyword, a bare scheme, *).
+CSP_SOURCE_RE = re.compile(
+    r"https://(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?"
+)
+
+
+class BadHooks(ValueError):
+    """The app's routes or CSP extras break a rule. Raised at startup."""
+
+
+def build_csp(extra=None):
+    """The Content-Security-Policy header: the base, plus the app's extra sources."""
+    extra = {} if extra is None else extra
+    if not isinstance(extra, dict):
+        raise BadHooks("csp must be a dict of directive -> list of sources")
+    for directive, sources in extra.items():
+        if directive not in CSP_EXTENDABLE:
+            raise BadHooks(f"csp: {directive!r} can't be changed (allowed: {', '.join(CSP_EXTENDABLE)})")
+        if not isinstance(sources, (list, tuple)) or not sources:
+            raise BadHooks(f"csp: {directive} needs a non-empty list of sources")
+        for src in sources:
+            if not isinstance(src, str) or not CSP_SOURCE_RE.fullmatch(src):
+                raise BadHooks(f"csp: {src!r} in {directive} is not an https origin such as https://img.example")
+    policy = [(d, list(srcs)) for d, srcs in BASE_CSP]
+    for directive in CSP_EXTENDABLE:
+        if directive not in extra:
+            continue
+        found = next((srcs for d, srcs in policy if d == directive), None)
+        if found is None:
+            found = ["'self'"]
+            policy.insert(len(policy) - 4, (directive, found))  # before the locked object-src ... frame-ancestors
+        for src in extra[directive]:
+            if src not in found:
+                found.append(src)
+    return "; ".join(f"{d} {' '.join(srcs)}" for d, srcs in policy)
+
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cross-Origin-Opener-Policy": "same-origin",
-    "Content-Security-Policy": (
-        "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; "
-        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    ),
+    "Content-Security-Policy": build_csp(),  # each server sends its own (the app's extras added)
 }
+
+CORE_PATHS = frozenset({"/api/events", "/api/health"})
+APP_ROUTE_METHODS = ("GET", "POST")
+APP_PATH_RE = re.compile(r"/api/app(/[a-z0-9][a-z0-9_-]*)+")
+
+
+class Route(NamedTuple):
+    """An app route: method "GET" or "POST", an exact path under /api/app/, and
+    fn(request) -> (status, JSON-able object)."""
+
+    method: str
+    path: str
+    fn: Callable[["AppRequest"], Any]
+
+
+@dataclass(frozen=True)
+class AppContext:
+    """What the app's routes factory gets, once at startup."""
+
+    data_dir: Path  # the event database's folder: keep the app's own SQLite file here
+    app_id: Any  # str, or None for an app that doesn't name one
+
+
+@dataclass(frozen=True)
+class AppRequest:
+    """What an app route's fn gets."""
+
+    method: str
+    path: str
+    query: dict  # name -> list of values, as parse_qs gives
+    body: Any  # the parsed JSON for a POST; None for a GET
+
+
+def build_routes(routes, ctx):
+    """Call the app's factory and check what it returns: {path: {method: fn}}."""
+    if routes is None:
+        return {}
+    if not callable(routes):
+        raise BadHooks("routes must be a function routes(ctx) -> list of Route, called once at startup")
+    made = routes(ctx)
+    if not isinstance(made, list):
+        raise BadHooks("routes(ctx) must return a list of Route")
+    table = {}
+    for r in made:
+        if not isinstance(r, Route):
+            raise BadHooks(f"routes: {r!r} is not a Route(method, path, fn)")
+        if r.method not in APP_ROUTE_METHODS:
+            raise BadHooks(f"routes: {r.method!r} on {r.path}: only GET and POST")
+        if not isinstance(r.path, str) or r.path in CORE_PATHS or not APP_PATH_RE.fullmatch(r.path):
+            raise BadHooks(
+                f"routes: {r.path!r} must be an exact path under /api/app/ (lower case letters, digits, - and _)"
+            )
+        if not callable(r.fn):
+            raise BadHooks(f"routes: {r.method} {r.path} needs a function")
+        methods = table.setdefault(r.path, {})
+        if r.method in methods:
+            raise BadHooks(f"routes: {r.method} {r.path} is listed twice")
+        methods[r.method] = r.fn
+    return table
 
 
 class DatabaseProblem(Exception):
@@ -342,11 +455,23 @@ class Handler(SimpleHTTPRequestHandler):
         ".svg": "image/svg+xml",
     }
 
-    def __init__(self, *args, store, allowed_hosts=(), quiet=False, app_version=VERSION, **kwargs):
+    def __init__(
+        self,
+        *args,
+        store,
+        allowed_hosts=(),
+        quiet=False,
+        app_version=VERSION,
+        app_routes=None,
+        csp=SECURITY_HEADERS["Content-Security-Policy"],
+        **kwargs,
+    ):
         self.store = store
         self.app_version = app_version
         self.allowed_hosts = allowed_hosts
         self.quiet = quiet
+        self.app_routes = app_routes or {}
+        self.csp = csp
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):
@@ -378,13 +503,61 @@ class Handler(SimpleHTTPRequestHandler):
             and origin
             and urlsplit(origin).netloc.lower() != self.headers["Host"].strip().lower()
         ):
+            self.close_connection = True  # the body is unread
             self.send_json(HTTPStatus.FORBIDDEN, {"error": "cross-origin request"})
             return True
         return False
 
+    def refuse_cross_site(self):
+        """App routes only: refuse a request a page on another site made. An
+        <img> or link sends no Origin, and a GET route may have a cost (a paid
+        lookup). Other apps on this machine are same-site, so refused too. A
+        client with no fetch metadata (an iOS Shortcut, curl) is let through."""
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site in ("", "same-origin", "none"):
+            return False
+        self.close_connection = True  # a POST's body is unread
+        self.send_json(HTTPStatus.FORBIDDEN, {"error": "cross-site request"})
+        return True
+
+    def serve_app_route(self, url):
+        """Run an app route, or reply 404/405. Every core check comes first."""
+        methods = self.app_routes.get(url.path)
+        if methods is None:
+            if self.command == "POST":
+                self.close_connection = True  # the body is unread
+            return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        fn = methods.get(self.command)
+        if fn is None:
+            if self.command == "POST":
+                self.close_connection = True
+            self._extra_headers = {"Allow": ", ".join(m for m in APP_ROUTE_METHODS if m in methods)}
+            return self.send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "method not allowed"})
+        if self.refuse_cross_site():
+            return None
+        if self.command == "POST":
+            body = self.read_json_body(url)  # also the ?app= check
+            if body is REPLIED:
+                return None
+        else:
+            if self.refuse_other_app(url.query):
+                return None
+            body = None
+        req = AppRequest(self.command, url.path, parse_qs(url.query), body)
+        result = fn(req)
+        if not (isinstance(result, tuple) and len(result) == 2):
+            raise TypeError(f"{self.command} {url.path} returned {type(result).__name__}, not (status, object)")
+        status, obj = result
+        if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status <= 599:
+            raise ValueError(f"{self.command} {url.path} returned status {status!r}")
+        return self.send_json(status, obj)
+
     def end_headers(self):
         for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, self.csp if k == "Content-Security-Policy" else v)
+        for k, v in getattr(self, "_extra_headers", {}).items():
             self.send_header(k, v)
+        self._extra_headers = {}
         # No self.path yet when the request line itself was unreadable.
         if not getattr(self, "path", "").startswith("/api/"):
             # Revalidate every time; the service worker does the offline caching.
@@ -490,6 +663,8 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": "after and limit must be integers"})
             return self.send_json(HTTPStatus.OK, self.store.read_after(after, limit))
+        if url.path.startswith("/api/app/"):
+            return self.serve_app_route(url)
         return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_HEAD(self):
@@ -501,7 +676,10 @@ class Handler(SimpleHTTPRequestHandler):
         if self.refuse_foreign():
             return
         url = urlsplit(self.path)
+        if url.path.startswith("/api/app/"):
+            return self.serve_app_route(url)
         if url.path != "/api/events":
+            self.close_connection = True  # the body is unread
             return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         body = self.read_json_body(url)
         if body is REPLIED:
@@ -598,11 +776,26 @@ def make_server(
     app_version=VERSION,
     app_id=None,
     max_connections=MAX_CONNECTIONS,
+    routes=None,
+    csp=None,
 ):
+    """routes: the app's factory routes(ctx) -> [Route, ...], called once here
+    with an AppContext. csp: {directive: [https origins]} added to the base CSP.
+    Both are checked before anything opens: a mistake raises BadHooks."""
+    policy = build_csp(csp)
+    db_path = Path(db_path)
+    app_routes = build_routes(routes, AppContext(data_dir=db_path.parent, app_id=app_id))
     store = EventStore(db_path, app_id=app_id)
     extra = frozenset(h.strip().lower() for h in allowed_hosts)
     handler = partial(
-        Handler, store=store, allowed_hosts=extra, quiet=quiet, app_version=app_version, directory=str(static_dir)
+        Handler,
+        store=store,
+        allowed_hosts=extra,
+        quiet=quiet,
+        app_version=app_version,
+        app_routes=app_routes,
+        csp=policy,
+        directory=str(static_dir),
     )
     httpd = CappedServer((host, port), handler, max_connections=max_connections)
     httpd.store = store
@@ -638,7 +831,8 @@ def serve_hint(port, tailnet):
     )
 
 
-# db_name, app_version, app_id and port come from the app's server/server.py.
+# db_name, app_version, app_id, port, routes and csp come from the app's
+# server/server.py. See make_server for routes and csp.
 def main(
     argv=None,
     *,
@@ -647,6 +841,8 @@ def main(
     app_id=None,
     description="Local-first app sync server",
     port=DEFAULT_PORT,
+    routes=None,
+    csp=None,
 ):
     args = parse_args(argv, db_name=db_name, description=description, port=port)
     try:
@@ -659,7 +855,11 @@ def main(
             args.allow_host + ([tailnet] if tailnet else []),
             app_version=app_version,
             app_id=app_id,
+            routes=routes,
+            csp=csp,
         )
+    except BadHooks as err:
+        sys.exit(f"server/server.py: {err}")
     except WrongApp as err:
         sys.exit(f"{err}. Give each app its own database (--db) and port.")
     except DatabaseProblem as err:

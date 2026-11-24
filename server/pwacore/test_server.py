@@ -704,5 +704,347 @@ class ConnectionCapTest(unittest.TestCase):
             self.fail("the freed slot was not reused")
 
 
+BASE_CSP = (
+    "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
+
+
+class AppHooksValidationTest(unittest.TestCase):
+    """An app passes its own routes (a factory called once at startup) and extra
+    CSP sources. Anything off is refused at startup, not on the first request."""
+
+    def make(self, routes=None, csp=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        httpd = server.make_server(
+            "127.0.0.1", 0, Path(tmp.name) / "data" / "e.db", Path(tmp.name), quiet=True, routes=routes, csp=csp
+        )
+        self.addCleanup(httpd.store.close)
+        self.addCleanup(httpd.server_close)
+        return httpd
+
+    def test_bad_routes_are_refused_at_startup(self):
+        def fn(req):
+            return 200, {}
+
+        cases = {
+            "PUT": [server.Route("PUT", "/api/app/x", fn)],
+            "HEAD": [server.Route("HEAD", "/api/app/x", fn)],
+            "outside /api/app/": [server.Route("GET", "/api/x", fn)],
+            "core events": [server.Route("POST", "/api/events", fn)],
+            "core health": [server.Route("GET", "/api/health", fn)],
+            "static": [server.Route("GET", "/index.html", fn)],
+            "bare prefix": [server.Route("GET", "/api/app/", fn)],
+            "trailing slash": [server.Route("GET", "/api/app/x/", fn)],
+            "query": [server.Route("GET", "/api/app/x?y=1", fn)],
+            "percent": [server.Route("GET", "/api/app/%2e%2e", fn)],
+            "dot dot": [server.Route("GET", "/api/app/../events", fn)],
+            "upper case": [server.Route("GET", "/api/app/Inbox", fn)],
+            "duplicate": [server.Route("GET", "/api/app/x", fn), server.Route("GET", "/api/app/x", fn)],
+            "not callable": [server.Route("GET", "/api/app/x", "fn")],
+            "not a route": [("GET", "/api/app/x", fn, "extra")],
+            "not a list": server.Route("GET", "/api/app/x", fn),
+        }
+        for label, routes in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(server.BadHooks):
+                    self.make(routes=lambda ctx, r=routes: r)
+        with self.assertRaises(server.BadHooks):
+            self.make(routes=[server.Route("GET", "/api/app/x", fn)])  # a list, not a factory
+
+    def test_get_and_post_on_one_path_and_nested_paths_are_fine(self):
+        def fn(req):
+            return 200, {}
+
+        routes = [
+            server.Route("GET", "/api/app/inbox", fn),
+            server.Route("POST", "/api/app/inbox", fn),
+            server.Route("GET", "/api/app/places/search", fn),
+            server.Route("GET", "/api/app/a_b-2", fn),
+        ]
+        self.make(routes=lambda ctx: routes)
+
+    def test_the_factory_gets_the_data_folder_and_app_id_once(self):
+        seen = []
+
+        def routes(ctx):
+            seen.append(ctx)
+            return []
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "data" / "e.db"
+        httpd = server.make_server("127.0.0.1", 0, db, Path(tmp.name), quiet=True, app_id="demo", routes=routes)
+        self.addCleanup(httpd.store.close)
+        self.addCleanup(httpd.server_close)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].data_dir, db.parent)
+        self.assertEqual(seen[0].app_id, "demo")
+
+    def test_bad_csp_extras_are_refused_at_startup(self):
+        cases = {
+            "script-src": {"script-src": ["https://x.example"]},
+            "default-src": {"default-src": ["https://x.example"]},
+            "worker-src": {"worker-src": ["https://x.example"]},
+            "object-src": {"object-src": ["https://x.example"]},
+            "frame-ancestors": {"frame-ancestors": ["https://x.example"]},
+            "unknown": {"x-src": ["https://x.example"]},
+            "semicolon": {"img-src": ["https://x.example; script-src *"]},
+            "space": {"img-src": ["https://x.example https://y.example"]},
+            "quote": {"img-src": ["'unsafe-inline'"]},
+            "keyword": {"img-src": ["'self'"]},
+            "star": {"img-src": ["*"]},
+            "http": {"img-src": ["http://x.example"]},
+            "scheme only": {"img-src": ["https:"]},
+            "data": {"connect-src": ["data:"]},
+            "path": {"img-src": ["https://x.example/path"]},
+            "no dot": {"img-src": ["https://localhost"]},
+            "star in the middle": {"img-src": ["https://a.*.example"]},
+            "upper case": {"img-src": ["https://X.example"]},
+            "a string, not a list": {"img-src": "https://x.example"},
+            "empty list": {"img-src": []},
+            "not a dict": [("img-src", ["https://x.example"])],
+        }
+        for label, csp in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(server.BadHooks):
+                    self.make(csp=csp)
+
+    def test_csp_output(self):
+        self.assertEqual(server.build_csp(None), BASE_CSP)
+        self.assertEqual(server.build_csp({}), BASE_CSP)
+        self.assertEqual(server.SECURITY_HEADERS["Content-Security-Policy"], BASE_CSP)
+        csp = server.build_csp(
+            {
+                "img-src": ["https://*.maps.example", "https://photos.example:8443"],
+                "connect-src": ["https://api.example", "https://api.example"],
+            }
+        )
+        self.assertIn("img-src 'self' data: blob: https://*.maps.example https://photos.example:8443;", csp)
+        self.assertIn("connect-src 'self' https://api.example;", csp)  # a new directive keeps 'self'; no repeats
+        self.assertEqual(csp.count("connect-src"), 1)
+        for locked in ["default-src 'self';", "object-src 'none';", "base-uri 'none';", "form-action 'none';"]:
+            self.assertIn(locked, csp)
+        self.assertTrue(csp.endswith("frame-ancestors 'none'"))
+
+
+class AppRoutesHttpTest(unittest.TestCase):
+    """App routes get every check core routes get, plus a cross-site guard (an
+    <img> or link from another site sends no Origin, yet a GET route may have
+    a cost, such as a paid API lookup)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        static = Path(cls.tmp.name) / "app"
+        static.mkdir()
+        (static / "index.html").write_text("<!doctype html><title>t</title>")
+        cls.calls = []
+
+        def echo(req):
+            cls.calls.append(req)
+            return 200, {"method": req.method, "path": req.path, "query": req.query, "body": req.body}
+
+        def made(req):
+            cls.calls.append(req)
+            return 201, {"ok": True}
+
+        def boom(req):
+            cls.calls.append(req)
+            raise RuntimeError("secret upstream detail key=abc123")
+
+        def nan(req):
+            cls.calls.append(req)
+            return 200, {"n": float("nan")}
+
+        def bad_status(req):
+            cls.calls.append(req)
+            return 99, {}
+
+        def not_a_tuple(req):
+            cls.calls.append(req)
+            return {"ok": True}
+
+        def routes(ctx):
+            return [
+                server.Route("GET", "/api/app/echo", echo),
+                server.Route("POST", "/api/app/echo", echo),
+                server.Route("POST", "/api/app/made", made),
+                server.Route("GET", "/api/app/boom", boom),
+                server.Route("GET", "/api/app/nan", nan),
+                server.Route("GET", "/api/app/bad-status", bad_status),
+                server.Route("GET", "/api/app/not-a-tuple", not_a_tuple),
+            ]
+
+        cls.httpd = server.make_server(
+            "127.0.0.1",
+            0,
+            Path(cls.tmp.name) / "e.db",
+            static,
+            allowed_hosts=["laptop.tail1234.ts.net"],
+            quiet=True,
+            app_id="demo",
+            routes=routes,
+            csp={"img-src": ["https://img.example"]},
+        )
+        cls.port = cls.httpd.server_address[1]
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.httpd.store.close()
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        self.calls.clear()
+
+    request = HttpTest.request
+
+    def test_get_and_post_reach_the_app_with_the_query_and_the_parsed_body(self):
+        status, headers, body = self.request("GET", "/api/app/echo?q=caf%C3%A9&q=2&app=demo")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            json.loads(body),
+            {"method": "GET", "path": "/api/app/echo", "query": {"q": ["café", "2"], "app": ["demo"]}, "body": None},
+        )
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertIn("no-store", headers["Cache-Control"])
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(headers["Content-Security-Policy"], server.build_csp({"img-src": ["https://img.example"]}))
+        status, _, body = self.request("POST", "/api/app/echo", {"text": "hi", "n": [1, 2]})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["body"], {"text": "hi", "n": [1, 2]})
+        status, _, body = self.request("POST", "/api/app/made", {})
+        self.assertEqual((status, json.loads(body)), (201, {"ok": True}))
+        self.assertEqual(len(self.calls), 3)
+
+    def test_the_request_is_read_only(self):
+        self.request("GET", "/api/app/echo")
+        with self.assertRaises(AttributeError):
+            self.calls[0].path = "/x"
+
+    def test_the_apps_csp_is_on_every_reply_and_another_server_keeps_the_base(self):
+        _, headers, _ = self.request("GET", "/")
+        self.assertIn("img-src 'self' data: blob: https://img.example;", headers["Content-Security-Policy"])
+        _, headers, _ = self.request("GET", "/api/health")
+        self.assertIn("https://img.example", headers["Content-Security-Policy"])
+        with tempfile.TemporaryDirectory() as tmp:
+            other = server.make_server("127.0.0.1", 0, Path(tmp) / "e.db", Path(tmp), quiet=True)
+            t = threading.Thread(target=other.serve_forever, daemon=True)
+            t.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{other.server_address[1]}/api/health") as r:
+                    self.assertEqual(r.headers["Content-Security-Policy"], BASE_CSP)
+            finally:
+                other.shutdown()
+                other.server_close()
+                other.store.close()
+
+    def test_every_refusal_stops_before_the_app(self):
+        tailnet = f"laptop.tail1234.ts.net:{self.port}"
+        cases = [
+            ("foreign host", "GET", "/api/app/echo", None, {"Host": "evil.example"}, 421),
+            ("other tailnet name", "GET", "/api/app/echo", None, {"Host": "other.tail1234.ts.net"}, 421),
+            ("other app", "GET", "/api/app/echo?app=other", None, {}, 409),
+            ("cross-site GET", "GET", "/api/app/echo", None, {"Sec-Fetch-Site": "cross-site"}, 403),
+            (
+                "same-site GET (another app on this machine)",
+                "GET",
+                "/api/app/echo",
+                None,
+                {"Sec-Fetch-Site": "same-site"},
+                403,
+            ),
+            ("foreign host POST", "POST", "/api/app/echo", {}, {"Host": "evil.example"}, 421),
+            ("cross-origin POST", "POST", "/api/app/echo", {}, {"Origin": "https://evil.example"}, 403),
+            (
+                "other port POST",
+                "POST",
+                "/api/app/echo",
+                {},
+                {"Host": tailnet, "Origin": "https://laptop.tail1234.ts.net:8765"},
+                403,
+            ),
+            ("cross-site POST", "POST", "/api/app/echo", {}, {"Sec-Fetch-Site": "cross-site"}, 403),
+            ("other app POST", "POST", "/api/app/echo?app=other", {}, {}, 409),
+            ("wrong method", "POST", "/api/app/boom", {}, {}, 405),
+            ("unknown app path", "GET", "/api/app/nope", None, {}, 404),
+            ("unknown app path POST", "POST", "/api/app/nope", {}, {}, 404),
+        ]
+        for label, method, path, body, headers, want in cases:
+            with self.subTest(label):
+                status, _, _ = self.request(method, path, body, headers=headers)
+                self.assertEqual(status, want)
+                self.assertEqual(self.calls, [], "the app was not called")
+
+    def test_post_body_rules_stop_before_the_app(self):
+        status, _, _ = self.request("POST", "/api/app/echo", b'{"a":1}', content_type="text/plain")
+        self.assertEqual(status, 415)
+        status, _, _ = self.request("POST", "/api/app/echo", b"{not json")
+        self.assertEqual(status, 400)
+        status, _, _ = self.request("POST", "/api/app/echo", b"x" * (server.MAX_BODY_BYTES + 1))
+        self.assertEqual(status, 413)
+        for header in ["abc", "-1"]:
+            with self.subTest(header):
+                with socket.create_connection(("127.0.0.1", self.port)) as sock:
+                    sock.sendall(
+                        f"POST /api/app/echo HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {header}\r\n\r\n".encode()
+                    )
+                    self.assertIn(b" 400 ", sock.recv(4096).split(b"\r\n")[0] + b" ")
+        with socket.create_connection(("127.0.0.1", self.port)) as sock:
+            sock.sendall(b"POST /api/app/echo HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\r\n")
+            self.assertIn(b" 411 ", sock.recv(4096).split(b"\r\n")[0] + b" ")
+        self.assertEqual(self.calls, [])
+
+    def test_a_request_without_fetch_metadata_or_from_this_origin_is_let_through(self):
+        # An iOS Shortcut sends no Sec-Fetch-Site; the app's own pages send same-origin;
+        # a typed address or bookmark sends none.
+        for value in [None, "same-origin", "none"]:
+            with self.subTest(value):
+                headers = {} if value is None else {"Sec-Fetch-Site": value}
+                status, _, _ = self.request("POST", "/api/app/echo", {"t": 1}, headers=headers)
+                self.assertEqual(status, 200)
+        port = self.port
+        status, _, _ = self.request("POST", "/api/app/echo", {"t": 2}, headers={"Origin": f"http://127.0.0.1:{port}"})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_wrong_method_says_which_are_allowed(self):
+        status, headers, _ = self.request("POST", "/api/app/boom", {})
+        self.assertEqual(status, 405)
+        self.assertEqual(headers["Allow"], "GET")
+        status, headers, _ = self.request("PUT", "/api/app/echo", {})
+        self.assertEqual(status, 501)  # http.server has no do_PUT
+        self.assertEqual(self.calls, [])
+
+    def test_head_never_runs_an_app_route(self):
+        status, _, _ = self.request("HEAD", "/api/app/echo")
+        self.assertEqual(status, 404)
+        self.assertEqual(self.calls, [])
+
+    def test_app_errors_become_a_plain_500_and_the_server_keeps_going(self):
+        for path in ["/api/app/boom", "/api/app/nan", "/api/app/bad-status", "/api/app/not-a-tuple"]:
+            with self.subTest(path):
+                status, _, body = self.request("GET", path)
+                self.assertEqual(status, 500)
+                self.assertEqual(json.loads(body), {"error": "server error"})
+                self.assertNotIn(b"secret", body)
+        status, _, _ = self.request("GET", "/api/health")
+        self.assertEqual(status, 200)
+
+    def test_core_routes_are_unchanged_beside_app_routes(self):
+        status, _, body = self.request("POST", "/api/events", {"events": [ev(900)]})
+        self.assertEqual((status, json.loads(body)["inserted"]), (200, 1))
+        status, _, body = self.request("GET", "/api/events?after=0")
+        self.assertEqual(status, 200)
+        self.assertEqual([e["id"] for e in json.loads(body)["events"]], ["id-0900"])
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

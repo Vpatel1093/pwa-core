@@ -27,7 +27,7 @@ App data that is not events goes in the app's own place:
 - In the browser: its own IndexedDB database, with a name other than `APP_ID` (for example `<APP_ID>-cache`).
 - On the server: its own SQLite file in `data/`, next to the event database, never a new table inside it. The event database can then be checked, backed up, restored or rebuilt by devices without touching app data, and the reverse.
 
-Data kept that way does not sync, is not in exports and is not rebuilt after a reset. So it must only be data the app can lose or get again: caches (place lookups, a map tile), or a server inbox whose rows turn into events once a device takes them. Anything the user would miss belongs in events.
+Data kept that way does not sync, is not in exports, is not rebuilt after a reset, and the recovery steps in [data-and-recovery.md](data-and-recovery.md) ("devices refill it") do not cover it. So it must only be data the app can lose or get again: caches (place lookups, a map tile), or a server inbox whose rows turn into events once a device takes them. Anything the user would miss belongs in events.
 
 ## Event envelope
 

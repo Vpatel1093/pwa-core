@@ -76,6 +76,36 @@ Open `https://<machine>.<tailnet>.ts.net:<PORT>` and use Add to Home Screen. HTT
 
 `npm run new-app` gives each new app its own port: `--port N`, or else the lowest port from 8765 up that no other app claims. Claims are each sibling app's `PORT =` line (an app is a folder with `core.lock.json`; one without the line claims 8765) and every port `tailscale serve status` uses. It never looks at what is listening now, because apps are not always running.
 
+## App routes and CSP
+
+The core serves `/api/events`, `/api/health` and the app's files. An app adds its own server routes and CSP sources in its `server/server.py`:
+
+```python
+from pwacore.server import Route, main
+
+
+def routes(ctx):  # called once at startup; ctx.data_dir, ctx.app_id
+    inbox = Inbox(ctx.data_dir / "inbox.db")  # the app's own SQLite file, opened once
+    return [
+        Route("POST", "/api/app/inbox", inbox.add),  # fn(req) -> (status, JSON-able object)
+        Route("GET", "/api/app/inbox", inbox.list),
+    ]
+
+
+CSP = {"img-src": ["https://img.example"]}  # added to the base policy
+
+if __name__ == "__main__":
+    main(..., routes=routes, csp=CSP)
+```
+
+- **Paths** are exact and live under `/api/app/` (lower case letters, digits, `-`, `_`), so a later core route can't collide with one. Use query parameters, not path parameters. GET and POST only; HEAD never runs an app route, and another method gets a 405.
+- **Checks.** An app route gets every check a core route gets, before `fn` runs: the Host check, the Origin check on POST, `?app=` (so the query name `app` is the core's), and for a POST the Content-Length, 2MB, `application/json` and JSON rules. It also refuses a request that a page on another site made (`Sec-Fetch-Site` `cross-site` or `same-site`: another app on this machine is same-site), because an `<img>` or a link sends no Origin and a GET may have a cost. A client that sends no fetch metadata, such as an iOS Shortcut or curl, is let through; it must send JSON.
+- **The request** (`req.method`, `req.path`, `req.query` as lists of values, `req.body`, parsed JSON or None) is read-only. Replies are JSON with the core's headers and `no-store`. An exception, a bad status or a value JSON can't hold becomes a plain 500; the details go to the server log only. Never put an upstream error or an API key in a reply.
+- **Threads.** Each connection has its own thread, so `fn` runs on many at once. Guard shared state with a lock, as the core's `EventStore` does, or open SQLite with WAL and a busy timeout.
+- **CSP.** `csp` adds https origins (optionally `https://*.example.com`, with a port) to `img-src`, `connect-src`, `font-src`, `media-src`, `style-src` or `frame-src`. A directive the base lacks starts from `'self'`. `script-src`, `default-src`, `worker-src` and the locked directives can't change, and anything else is refused. The service worker serves the cached page with its old headers, so a CSP change shows only after a new app version.
+- A mistake in `routes` or `csp` stops the server at startup. Test them in the app (a `server/test_*.py` that calls `make_server` with them), so the deploy tests catch it, not the server start.
+- A route goes into the core only when every app needs it. What the app stores itself, and what that means for backups: [docs/data-format.md](docs/data-format.md).
+
 ## Checks
 
 ```sh
