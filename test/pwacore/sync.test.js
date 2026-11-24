@@ -153,6 +153,53 @@ test('a restored server backup (same id, fewer events) gets everything pushed ag
   assert.ok(isOn(await a.state(), 'c4'), 'a sees events added after the restore');
 });
 
+test('a backup restored without a new server id is caught even after new events pass the old cursor', async () => {
+  const srv = fakeServer();
+  const a = device('a', srv);
+  const b = device('b', srv);
+  const c = device('c', srv);
+  await a.tick('c1');
+  await a.sync.syncOnce();
+  await a.tick('c2');
+  await a.tick('c3');
+  await a.sync.syncOnce();
+  await b.sync.syncOnce(); // b's cursor: 3
+  srv.restore(1); // the backup holds only c1
+  await c.tick('c5');
+  await c.tick('c6');
+  await c.tick('c7');
+  await c.sync.syncOnce(); // head is 4 again, past b's cursor
+  const r = await b.sync.syncOnce();
+  assert.equal(r.pushError, null);
+  const ids = new Set(srv.rows.map((e) => e.data.key));
+  assert.deepEqual([...ids].sort(), ['c1', 'c2', 'c3', 'c5', 'c6', 'c7'], 'b pushed back what the backup lost');
+  const state = await b.state();
+  for (const key of ['c5', 'c6', 'c7']) assert.ok(isOn(state, key), `b has ${key}, stored where its old cursor pointed`);
+});
+
+test('a server from before after_id never makes a device start over', async () => {
+  const srv = fakeServer({ afterIds: false });
+  const a = device('a', srv);
+  await a.tick('c1');
+  await a.sync.syncOnce();
+  await a.tick('c2');
+  await a.sync.syncOnce();
+  const posts = srv.posts;
+  await a.sync.syncOnce();
+  assert.equal(srv.posts, posts, 'nothing pushed again');
+  assert.equal(await a.store.outboxCount(), 0);
+});
+
+test('the cursor and the id at it are saved together, so a sync killed between them starts no reset', async () => {
+  const srv = fakeServer();
+  const a = device('a', srv);
+  await a.tick('c1');
+  await a.sync.syncOnce();
+  assert.deepEqual(await a.store.getMeta('pullCursorId'), { cursor: 1, id: srv.rows[0].id });
+  await a.sync.syncOnce();
+  assert.equal(srv.posts, 1, 'a second sync with nothing new pushes nothing');
+});
+
 test('a reset interrupted before saving the new server id runs again next time', async () => {
   const srv = fakeServer();
   const a = device('a', srv);

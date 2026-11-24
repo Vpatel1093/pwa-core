@@ -71,8 +71,19 @@ class EventStoreTest(unittest.TestCase):
                 "server_id": self.store.server_id,
                 "app_id": None,
                 "head": third["next"],
+                "after_id": "id-0004",
             },
         )
+
+    def test_read_after_names_the_event_at_the_cursor(self):
+        """So a device can tell this database from an older copy of it (a
+        backup restored without --new-server-id) whose cursor numbers now
+        belong to other events."""
+        self.store.insert([ev(1), ev(2), ev(3)])
+        self.assertIsNone(self.store.read_after(0, 10)["after_id"])
+        self.assertEqual(self.store.read_after(2, 10)["after_id"], "id-0002")
+        self.assertEqual(self.store.read_after(3, 10)["after_id"], "id-0003")
+        self.assertIsNone(self.store.read_after(99, 10)["after_id"], "past head: nothing there")
 
     def test_persists_across_reopen(self):
         self.store.insert([ev(1)])

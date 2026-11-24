@@ -43,11 +43,11 @@ An edit passes `after` (the winning event's `ts`) to `makeEvent`. The new event 
 
 `POST /api/events` takes `{"events": [...]}` (up to 1000 events, 2MB). It stores every acceptable event, ignores ids it already has, and lists the rest in `rejected`. Retrying a rejected event won't help, so the device drops it from its outbox and lists it in diagnostics.
 
-`GET /api/events?after=<cursor>&limit=<n>` pages through events in the order the server stored them. Each page has `next`, `more`, `server_id`, `app_id` and `head`.
+`GET /api/events?after=<cursor>&limit=<n>` pages through events in the order the server stored them. Each page has `next`, `more`, `server_id`, `app_id`, `head` and `after_id` (the id of the event at the cursor).
 
 Both take `app=<APP_ID>`. The database keeps the app id it was first started with (`APP_ID` in `server/server.py`), and a request that names another app gets a 409, so two apps' events never mix. A request with no `app` (an older client) is let through.
 
-If `server_id` changes (a new database) or the cursor is past `head` (a restored backup), the device resets its cursor and pushes everything it has again. See [data-and-recovery.md](data-and-recovery.md).
+If `server_id` changes (a new database), the cursor is past `head`, or `after_id` is not the id of the last event the device pulled (both: a restored backup), the device resets its cursor and pushes everything it has again. See [data-and-recovery.md](data-and-recovery.md).
 
 ## Changing a body shape
 

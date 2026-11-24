@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 // head, per-event rejects. test/integration.test.js runs the real one.
 /** @typedef {import('../../../app/core/events.js').PwaEvent} PwaEvent */
 
-/** @param {{ pageSize?: number, serverId?: string, rejectIds?: string[], appId?: string | null }} [opts] */
-export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [], appId = null } = {}) {
+/** @param {{ pageSize?: number, serverId?: string, rejectIds?: string[], appId?: string | null, afterIds?: boolean }} [opts] */
+export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [], appId = null, afterIds = true } = {}) {
   /** @type {PwaEvent[]} */
   const rows = [];
   const ids = new Set();
@@ -59,6 +59,9 @@ export function fakeServer({ pageSize = 500, serverId = 'srv-1', rejectIds = [],
           server_id: srv.serverId,
           app_id: appId,
           head: rows.length,
+          // The id of the event at the cursor, so a device can tell an older
+          // copy of the database (afterIds: false is a server from before it).
+          ...(afterIds ? { after_id: after > 0 ? rows[after - 1]?.id ?? null : null } : {}),
         });
       }
       return reply(404, { error: 'not found' });

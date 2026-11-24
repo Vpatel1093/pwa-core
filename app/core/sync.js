@@ -114,18 +114,27 @@ export function createSync({
     let skipped = 0;
     let after = await store.getMeta('pullCursor', 0);
     const knownServer = await store.getMeta('serverId', null);
+    // The id of the last event pulled, with the cursor it was saved at.
+    /** @type {{ cursor: number, id: string | null } | null} */
+    let at = await store.getMeta('pullCursorId', null);
     for (;;) {
       const page = await request(`${base}/api/events?after=${after}&limit=${PULL_PAGE}${app ? `&${app}` : ''}`);
       checkPage(page);
       const replaced = page.server_id && knownServer !== null && page.server_id !== knownServer;
       // Cursor past the end: the server is an older copy (restored backup).
       const behind = Number.isSafeInteger(page.head) && after > page.head;
-      if (replaced || behind) {
+      // An older copy that has since taken new events: the cursor is within
+      // head again, but another event sits there. (A server from before
+      // after_id leaves it out; at.cursor differs if the app died between
+      // saving the cursor and saving this.)
+      const moved = 'after_id' in page && at !== null && at.cursor === after && at.id !== null && page.after_id !== at.id;
+      if (replaced || behind || moved) {
         // Our cursor means nothing there, and it may be missing our events.
         // Order matters: if the app dies partway, the server id still
         // differs (or the cursor is still past head) and this runs again.
         await store.requeueAll();
         await store.setMeta('pullCursor', 0);
+        await store.setMeta('pullCursorId', null);
         if (page.server_id) await store.setMeta('serverId', page.server_id);
         return { skipped, restarted: true };
       }
@@ -142,6 +151,11 @@ export function createSync({
       received.push(...valid);
       after = page.next;
       await store.setMeta('pullCursor', after);
+      if (page.events.length) {
+        const last = page.events[page.events.length - 1]?.id;
+        at = { cursor: after, id: typeof last === 'string' ? last : null };
+        await store.setMeta('pullCursorId', at);
+      }
       if (!page.more) return { skipped, restarted: false };
     }
   }

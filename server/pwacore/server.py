@@ -14,7 +14,8 @@ API
     GET  /api/health
     POST /api/events        {"events": [...]}  -> {"received": n, "inserted": n, "rejected": [{"index", "id", "reason"}]}
     GET  /api/events?after=<cursor>&limit=<n>  -> {"events": [...], "next": cursor, "more": bool,
-                                                    "server_id": id, "head": highest cursor}
+                                                    "server_id": id, "head": highest cursor,
+                                                    "after_id": id of the event at the cursor}
 
 Events are deduplicated by id; the first copy of an id is kept. A push stores
 every acceptable event and lists the rest in "rejected" (retrying won't help
@@ -149,6 +150,7 @@ class EventStore:
                 "SELECT seq, body FROM events WHERE seq > ? ORDER BY seq LIMIT ?", (after, limit + 1)
             ).fetchall()
             head = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+            at = self._db.execute("SELECT id FROM events WHERE seq = ?", (after,)).fetchone()
         more = len(rows) > limit
         rows = rows[:limit]
         return {
@@ -160,6 +162,10 @@ class EventStore:
             # A client whose cursor is past head is talking to an older copy
             # of this database (restored from backup) and starts over.
             "head": head,
+            # The id of the event at the cursor. A device that remembers another
+            # id there is talking to an older copy restored without
+            # --new-server-id whose cursor numbers now name other events.
+            "after_id": at[0] if at else None,
         }
 
     def close(self):
