@@ -40,6 +40,7 @@ import sys
 import threading
 import traceback
 import uuid
+from decimal import Decimal
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -215,36 +216,99 @@ def check_batch(body):
     return None
 
 
-def too_deep(root):
-    """True if root nests more than MAX_DEPTH objects and arrays deep. A loop,
-    not recursion, so any depth gets an answer."""
+def _walk(root):
+    """(too_deep, extra): too_deep if root nests more than MAX_DEPTH objects and
+    arrays deep; extra is how many more bytes JavaScript's JSON.stringify writes
+    for its numbers than json.dumps does. A loop, not recursion, so any depth
+    gets an answer."""
     todo = [(root, 1)]
+    extra = 0
     while todo:
         v, depth = todo.pop()
         if isinstance(v, (dict, list)):
             if depth > MAX_DEPTH:
-                return True
+                return True, extra
             todo.extend((x, depth + 1) for x in (v.values() if isinstance(v, dict) else v))
-    return False
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            extra += len(js_number(v)) - len(repr(v) if isinstance(v, float) else str(v))
+    return False, extra
+
+
+def js_number(x):
+    """How JSON.stringify writes this number once a browser has parsed it
+    (ECMAScript Number::toString), so the server measures an event's size as
+    the client does."""
+    if isinstance(x, int):
+        if -MAX_TS <= x <= MAX_TS:
+            return str(x)
+        try:
+            x = float(x)
+        except OverflowError:
+            return "null"  # past the largest double: JS reads Infinity
+    if x != x or x in (float("inf"), float("-inf")):
+        return "null"
+    if x == 0:
+        return "0"  # -0 too
+    sign = "-" if x < 0 else ""
+    # repr gives the shortest digits that read back as x, as JS does.
+    t = Decimal(repr(abs(x))).as_tuple()
+    digits = "".join(map(str, t.digits))
+    stripped = digits.rstrip("0")
+    exp = t.exponent + len(digits) - len(stripped)
+    digits = stripped
+    k, n = len(digits), len(digits) + exp  # x = 0.digits * 10^n
+    if k <= n <= 21:
+        out = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        out = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        out = "0." + "0" * -n + digits
+    else:
+        e = n - 1
+        out = digits[0] + ("." + digits[1:] if k > 1 else "") + "e" + ("+" if e >= 0 else "-") + str(abs(e))
+    return sign + out
+
+
+def is_id(v):
+    """A non-empty string of at most MAX_ID_LEN UTF-16 units: JavaScript's
+    length, which is what the client counts (an emoji is 2)."""
+    return isinstance(v, str) and 0 < len(v.encode("utf-16-le", "surrogatepass")) // 2 <= MAX_ID_LEN
+
+
+def is_js_int(v, low):
+    """An integer from low to 2^53-1 (JS Number.isSafeInteger). A float like
+    5.0 is refused: JSON.stringify never writes one, only another writer can."""
+    return type(v) is int and low <= v <= MAX_TS
 
 
 def check_event(e):
-    """Return None if the event can be stored, else a short reason."""
+    """Return None if the event can be stored, else a short reason. The same
+    rules as the client's validateEnvelope (app/core/events.js), so every event
+    stored here is one every device keeps; test/pwacore/envelope-cases.json
+    holds the cases both sides must judge alike."""
     if not isinstance(e, dict):
         return "not an object"
-    if not isinstance(e.get("id"), str) or not 0 < len(e["id"]) <= MAX_ID_LEN:
+    if not is_id(e.get("id")):
         return "bad id"
+    if not is_js_int(e.get("v"), 1):
+        return "v must be an integer from 1 to 2^53-1"
     if not isinstance(e.get("type"), str) or not e["type"]:
         return "bad type"
-    ts = e.get("ts")
-    if type(ts) is not int or not 0 <= ts <= MAX_TS:
+    if "scope_id" in e and not is_id(e["scope_id"]):
+        return "bad scope_id"
+    if not is_js_int(e.get("ts"), 0):
         return "ts must be an integer from 0 to 2^53-1"
+    if not is_id(e.get("device_id")):
+        return "bad device_id"
+    if not isinstance(e.get("data"), dict):
+        return "data must be an object"
     # Clients skip deeper events (app/core/events.js MAX_DEPTH), so storing
     # one would only waste it; and json.dumps below recurses.
-    if too_deep(e):
+    deep, extra = _walk(e)
+    if deep:
         return "nested too deep"
     try:
-        size = len(to_json(e).encode())
+        size = len(to_json(e).encode()) + extra
     except ValueError:
         return "NaN and Infinity aren't allowed"
     except UnicodeEncodeError:
@@ -428,7 +492,9 @@ class Handler(SimpleHTTPRequestHandler):
                 good.append(e)
             else:
                 event_id = e.get("id") if isinstance(e, dict) else None
-                if not isinstance(event_id, str) or check_event({"id": event_id, "type": "x", "ts": 0}):
+                if not isinstance(event_id, str) or check_event(
+                    {"id": event_id, "v": 1, "type": "x", "ts": 0, "device_id": "x", "data": {}}
+                ):
                     event_id = None  # not echoed back if it isn't a sound id (it might not even encode)
                 rejected.append({"index": i, "id": event_id, "reason": reason})
         inserted = self.store.insert(good)

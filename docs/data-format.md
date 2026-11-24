@@ -22,7 +22,7 @@ So the only stored data is an append-only list of events. Each device builds the
 | `app_version` | For debugging. |
 | `data`        | The body. The app owns its shape and checks it with `createEventChecks`. |
 
-Limits, enforced by both the app and the server: ids up to 100 characters, an event up to 64KB of JSON, `ts` a safe integer, no NaN or Infinity, no lone UTF-16 surrogates.
+Limits, enforced by both the app and the server with the same rules: `id`, `scope_id` and `device_id` up to 100 characters (UTF-16 units, as JavaScript counts: an emoji is 2), `v` and `ts` safe integers, `data` an object, at most 32 objects and arrays deep, an event up to 64KB of JSON as `JSON.stringify` writes it, no NaN or Infinity, no lone UTF-16 surrogates. The server stores only events every device keeps, so a pull never skips one for good; `test/pwacore/envelope-cases.json` holds the cases both checks must judge alike.
 
 Ids inside `data` (a note, a stop) come from `randomId(prefix)`. Never make an id from a label: ids are copied into every event that names the thing, and events are never rewritten.
 

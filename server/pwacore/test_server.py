@@ -265,7 +265,60 @@ class AppIdTest(unittest.TestCase):
         self.assertEqual(request("GET", "/api/health")[1]["app_id"], "trips")
 
 
+def case_event(base, c):
+    """Builds a case of test/pwacore/envelope-cases.json, as events.test.js does."""
+    if c.get("whole"):
+        return c["event"]
+    e = {**base, **c["event"]}
+    for f in c.get("drop", []):
+        del e[f]
+    if c.get("nest"):
+        x = {}
+        for _ in range(c["nest"] - 2):
+            x = {"n": x}
+        e["data"] = x
+    if c.get("pad"):
+        e["pad"] = "x" * c["pad"]
+    return e
+
+
 class ValidationTest(unittest.TestCase):
+    def test_judges_the_shared_cases_as_the_client_does(self):
+        """An event the server stores must never be one a device skips, or that
+        device loses it for good when its pull cursor moves past it."""
+        path = Path(__file__).resolve().parent.parent.parent / "test" / "pwacore" / "envelope-cases.json"
+        cases = json.loads(path.read_text(encoding="utf-8"))
+        self.assertGreater(len(cases["cases"]), 40)
+        for c in cases["cases"]:
+            with self.subTest(case=c["name"]):
+                expected = c.get("server_ok", c["ok"])
+                self.assertEqual(server.check_event(case_event(cases["base"], c)) is None, expected)
+
+    def test_js_number_writes_numbers_as_json_stringify_does(self):
+        # Expected values from node: JSON.stringify(JSON.parse(text)).
+        table = {
+            "0": "0",
+            "-0.0": "0",
+            "5.0": "5",
+            "0.1": "0.1",
+            "1e-7": "1e-7",
+            "0.000001": "0.000001",
+            "1e16": "10000000000000000",
+            "1e21": "1e+21",
+            "99999999999999999999": "100000000000000000000",
+            "9007199254740993": "9007199254740992",
+            "1.7976931348623157e308": "1.7976931348623157e+308",
+            "5e-324": "5e-324",
+            "-2.5e-10": "-2.5e-10",
+            "123456789.125": "123456789.125",
+            "1e400": "null",
+            "12345678901234567890123": "1.2345678901234568e+22",
+        }
+        for text, js in table.items():
+            with self.subTest(text=text):
+                value = json.loads(text) if text != "1e400" else 10**400
+                self.assertEqual(server.js_number(value), js)
+
     def test_rejects_an_event_nested_too_deep(self):
         def nested(depth):
             inner = {}

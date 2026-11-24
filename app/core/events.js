@@ -127,7 +127,7 @@ export function makeEvent(ctx, { type, scope_id, fields = {}, data = {}, after =
 export function validateEnvelope(e) {
   if (!isPlainObject(e)) return 'event must be an object';
   if (!isId(e.id)) return 'id';
-  if (!Number.isInteger(e.v) || e.v < 1) return 'v';
+  if (!Number.isSafeInteger(e.v) || e.v < 1) return 'v';
   if (!isNonEmptyString(e.type)) return 'type';
   if (e.scope_id !== undefined && !isId(e.scope_id)) return 'scope_id';
   if (!Number.isSafeInteger(e.ts) || e.ts < 0) return 'ts';

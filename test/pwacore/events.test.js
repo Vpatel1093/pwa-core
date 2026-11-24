@@ -5,6 +5,7 @@ import {
   makeEvent, validateEnvelope, createEventChecks, maxTs, MAX_EVENT_BYTES, MAX_DEPTH,
 } from '../../app/core/events.js';
 import { uuidv7Time } from '../../app/core/uuid.js';
+import { readFileSync } from 'node:fs';
 
 const ctx = (t = 1000, extra = {}) => ({
   clock: createClock({ now: () => t }),
@@ -189,4 +190,32 @@ test('a lone surrogate deep inside still counts', () => {
   const e = nested(MAX_DEPTH - 1);
   e.data.bad = ['ok', { ['\uD800']: 1 }];
   assert.equal(validateEnvelope(e), 'text');
+});
+
+// The same cases run against the server's check_event
+// (server/pwacore/test_server.py): an event the server stores must never be
+// one a device skips, or that device loses it for good when its pull cursor
+// moves past it.
+const CASES = JSON.parse(readFileSync(new URL('./envelope-cases.json', import.meta.url), 'utf8'));
+
+/** @param {any} c */
+function caseEvent(c) {
+  if (c.whole) return c.event;
+  /** @type {Record<string, any>} */
+  const e = { ...CASES.base, ...c.event };
+  for (const f of c.drop ?? []) delete e[f];
+  if (c.nest) {
+    let x = {};
+    for (let i = 0; i < c.nest - 2; i++) x = { n: x };
+    e.data = x;
+  }
+  if (c.pad) e.pad = 'x'.repeat(c.pad);
+  return e;
+}
+
+test('validateEnvelope judges the shared cases as the server does', () => {
+  assert.ok(CASES.cases.length > 40);
+  for (const c of CASES.cases) {
+    assert.equal(validateEnvelope(caseEvent(c)) === null, c.ok, c.name);
+  }
 });
