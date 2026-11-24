@@ -1,0 +1,11 @@
+# ruff: Python lint and format check (server/ and tools/).
+# npm run lint runs it through tools/pwacore/lint.mjs, which pins the version.
+required-version = "==0.17.4"
+line-length = 120
+target-version = "py39"
+extend-exclude = ["data", ".local", "dist"]
+
+[lint]
+# The default set (pyflakes, pycodestyle errors), plus pycodestyle warnings,
+# bugbear (likely bugs), pylint errors and unused noqa comments.
+select = ["E4", "E7", "E9", "F", "W", "B", "PLE", "RUF100"]

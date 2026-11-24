@@ -1,0 +1,15 @@
+#!/bin/sh
+# pre-push: the full check (syntax, lint, types) and the tests.
+# Installed by `npm run hooks` (git config core.hooksPath .githooks).
+# Skip once with `git push --no-verify`.
+set -eu
+
+# git exports GIT_DIR and the like into hooks, and the tests run git in temp
+# repos: with these set, they would write into this one. Drop them all; git
+# runs the hook from the top of the work tree.
+# shellcheck disable=SC2046 # the names are git's, one word each
+unset $(git rev-parse --local-env-vars)
+
+# git writes the refs being pushed on stdin; nothing here reads them.
+npm run --silent check </dev/null
+npm test --silent </dev/null

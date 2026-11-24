@@ -51,7 +51,7 @@ export function createSync({
       }
       return await res.json();
     } catch (err) {
-      if (/** @type {Error} */ (err).name === 'AbortError') throw new Error('timed out');
+      if (/** @type {Error} */ (err).name === 'AbortError') throw new Error('timed out', { cause: err });
       throw err;
     } finally {
       clearTimeout(timer);

@@ -1,0 +1,25 @@
+#!/bin/sh
+# pre-commit: lint the staged files, then type-check if any JS is staged.
+# Fast; the full check and the tests run in pre-push.
+# Installed by `npm run hooks` (git config core.hooksPath .githooks).
+# Skip once with `git commit --no-verify`.
+set -eu
+
+# The staged list must come from git's own index (a `commit -a` or
+# `commit <paths>` uses a temporary one), so read it before the unset below.
+list=$(mktemp "${TMPDIR:-/tmp}/pre-commit.XXXXXX")
+trap 'rm -f "$list"' EXIT
+git diff --cached --name-only --diff-filter=ACMR -z >"$list"
+
+# git exports GIT_DIR, GIT_INDEX_FILE and the like into hooks. A tool or a
+# test that runs git would then act on this repo or its index instead of its
+# own. Drop them all; git runs the hook from the top of the work tree.
+# shellcheck disable=SC2046 # the names are git's, one word each
+unset $(git rev-parse --local-env-vars)
+
+# Lints the working tree copy of each staged file: a partly staged file is
+# checked as it is on disk.
+node tools/pwacore/lint.mjs --files0 "$list"
+if tr '\0' '\n' <"$list" | grep -Eq '\.(js|mjs|cjs)$'; then
+  npm run --silent typecheck
+fi

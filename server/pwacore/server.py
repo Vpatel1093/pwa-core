@@ -46,7 +46,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-VERSION = "0.1.1"  # core version; matches app/core/version.js (a test checks)
+VERSION = "0.1.2"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
 DEFAULT_STATIC = ROOT / "app"
@@ -193,7 +193,7 @@ def host_allowed(host, extra=()):
 def check_batch(body):
     """Return None if the push body has the right shape, else a short reason."""
     if not isinstance(body, dict) or not isinstance(body.get("events"), list):
-        return "body must be {\"events\": [...]}"
+        return 'body must be {"events": [...]}'
     if len(body["events"]) > MAX_BATCH:
         return f"at most {MAX_BATCH} events per push"
     return None
@@ -264,7 +264,11 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "unknown host"})
             return True
         origin = self.headers.get("Origin")
-        if self.command == "POST" and origin and urlsplit(origin).netloc.lower() != self.headers["Host"].strip().lower():
+        if (
+            self.command == "POST"
+            and origin
+            and urlsplit(origin).netloc.lower() != self.headers["Host"].strip().lower()
+        ):
             self.send_json(HTTPStatus.FORBIDDEN, {"error": "cross-origin request"})
             return True
         return False
@@ -308,7 +312,10 @@ class Handler(SimpleHTTPRequestHandler):
         if not url.path.startswith("/api/"):
             return super().do_GET()
         if url.path == "/api/health":
-            return self.send_json(HTTPStatus.OK, {"ok": True, "version": self.app_version, "core_version": VERSION, "server_id": self.store.server_id})
+            return self.send_json(
+                HTTPStatus.OK,
+                {"ok": True, "version": self.app_version, "core_version": VERSION, "server_id": self.store.server_id},
+            )
         if url.path == "/api/events":
             q = parse_qs(url.query)
             try:
@@ -369,13 +376,17 @@ class Handler(SimpleHTTPRequestHandler):
                     event_id = None  # not echoed back if it isn't a sound id (it might not even encode)
                 rejected.append({"index": i, "id": event_id, "reason": reason})
         inserted = self.store.insert(good)
-        return self.send_json(HTTPStatus.OK, {"received": len(body["events"]), "inserted": inserted, "rejected": rejected})
+        return self.send_json(
+            HTTPStatus.OK, {"received": len(body["events"]), "inserted": inserted, "rejected": rejected}
+        )
 
 
 def make_server(host, port, db_path, static_dir, allowed_hosts=(), quiet=False, app_version=VERSION):
     store = EventStore(db_path)
     extra = frozenset(h.strip().lower() for h in allowed_hosts)
-    handler = partial(Handler, store=store, allowed_hosts=extra, quiet=quiet, app_version=app_version, directory=str(static_dir))
+    handler = partial(
+        Handler, store=store, allowed_hosts=extra, quiet=quiet, app_version=app_version, directory=str(static_dir)
+    )
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.store = store
     return httpd
@@ -386,10 +397,18 @@ def parse_args(argv=None, *, db_name=DEFAULT_DB_NAME, description="Local-first a
     p.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--db", type=Path, default=ROOT / "data" / db_name, help=f"SQLite file (default data/{db_name})")
-    p.add_argument("--allow-host", action="append", default=[], metavar="NAME",
-                   help="extra hostname to accept besides loopback and this machine's Tailscale name (repeatable)")
-    p.add_argument("--new-server-id", action="store_true",
-                   help="after restoring the database from a backup: make every device push its events again")
+    p.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="extra hostname to accept besides loopback and this machine's Tailscale name (repeatable)",
+    )
+    p.add_argument(
+        "--new-server-id",
+        action="store_true",
+        help="after restoring the database from a backup: make every device push its events again",
+    )
     return p.parse_args(argv)
 
 
@@ -398,8 +417,14 @@ def main(argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, description
     args = parse_args(argv, db_name=db_name, description=description)
     try:
         tailnet = tailnet_name()
-        httpd = make_server(args.host, args.port, args.db, DEFAULT_STATIC, args.allow_host + ([tailnet] if tailnet else []),
-                            app_version=app_version)
+        httpd = make_server(
+            args.host,
+            args.port,
+            args.db,
+            DEFAULT_STATIC,
+            args.allow_host + ([tailnet] if tailnet else []),
+            app_version=app_version,
+        )
     except DatabaseProblem as err:
         sys.exit(
             f"{args.db} is damaged ({err}).\n"
@@ -411,10 +436,16 @@ def main(argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, description
         print("New server id: devices will push their events again on next sync.", file=sys.stderr)
     print(f"Serving on http://{args.host}:{httpd.server_address[1]}  (db: {args.db})", file=sys.stderr)
     if tailnet:
-        print(f"Phone access over Tailscale: tailscale serve --bg {httpd.server_address[1]}, then https://{tailnet}", file=sys.stderr)
+        print(
+            f"Phone access over Tailscale: tailscale serve --bg {httpd.server_address[1]}, then https://{tailnet}",
+            file=sys.stderr,
+        )
     else:
-        print("Tailscale name not found, so only this computer can use the app. Start Tailscale and restart,"
-              " or pass --allow-host <machine>.<tailnet>.ts.net", file=sys.stderr)
+        print(
+            "Tailscale name not found, so only this computer can use the app. Start Tailscale and restart,"
+            " or pass --allow-host <machine>.<tailnet>.ts.net",
+            file=sys.stderr,
+        )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -422,4 +453,3 @@ def main(argv=None, *, db_name=DEFAULT_DB_NAME, app_version=VERSION, description
     finally:
         httpd.server_close()
         httpd.store.close()
-

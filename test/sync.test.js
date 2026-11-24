@@ -225,7 +225,7 @@ test('a request that never answers times out instead of hanging sync', async () 
     store: a.store,
     clock: a.clock,
     timeoutMs: 20,
-    fetch: (url, { signal } = {}) => new Promise((_, reject) => signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))),
+    fetch: (url, { signal } = {}) => new Promise((_, reject) => { signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))); }),
   });
   await assert.rejects(sync.syncOnce(), /timed out/);
 });

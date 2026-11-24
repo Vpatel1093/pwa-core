@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkLock } from '../tools/pwacore/lock.mjs';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync, symlinkSync, statSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newApp } from '../tools/new-app.mjs';
+import { RUFF_VERSION } from '../tools/pwacore/lint.mjs';
 
 const CORE = fileURLToPath(new URL('..', import.meta.url));
 
@@ -66,6 +67,32 @@ test('a new app starts with the type check: its configs, the script and pinned T
   }
 });
 
+test('a new app starts with lint and the git hooks: configs, scripts, pinned ESLint', (t) => {
+  const to = join(scratch(t), 'linted');
+  newApp({ from: CORE, to, id: 'linted', name: 'Linted App' });
+  /** @param {string} root */
+  const pkgOf = (root) => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const core = pkgOf(CORE);
+  const pkg = pkgOf(to);
+  for (const s of ['lint', 'hooks']) assert.equal(pkg.scripts[s], core.scripts[s], `the ${s} script comes along`);
+  assert.match(pkg.scripts.check, /npm run lint/, 'npm run check runs lint');
+  for (const dep of ['eslint', '@eslint/js', 'globals']) {
+    assert.match(core.devDependencies[dep] ?? '', /^\d+\.\d+\.\d+$/, `${dep} is pinned to an exact version`);
+    assert.equal(pkg.devDependencies[dep], core.devDependencies[dep]);
+  }
+  for (const f of ['eslint.config.js', 'ruff.toml']) assert.ok(existsSync(join(to, f)), `${f} comes along`);
+  for (const hook of ['pre-commit', 'pre-merge-commit', 'pre-push']) {
+    assert.ok(statSync(join(to, '.githooks', hook)).mode & 0o100, `${hook} comes along, executable`);
+  }
+  // The renamed copy lints clean. It borrows the core's node_modules.
+  symlinkSync(join(CORE, 'node_modules'), join(to, 'node_modules'), 'dir');
+  execFileSync(process.execPath, [join(CORE, 'node_modules/eslint/bin/eslint.js'), '.'], { cwd: to, encoding: 'utf8' });
+  if (spawnSync('uvx', ['--version']).error) return t.diagnostic('uvx not found: ruff not run on the copy');
+  for (const args of [['check'], ['format', '--check']]) {
+    execFileSync('uvx', [`ruff@${RUFF_VERSION}`, ...args], { cwd: to, encoding: 'utf8', stdio: 'pipe' });
+  }
+});
+
 test('newApp leaves out local, generated and private files', (t) => {
   const from = scratch(t);
   for (const f of ['app/js/config.js', 'app/sw.js', 'app/manifest.webmanifest', 'app/index.html', 'server/server.py', 'package.json', 'README.md']) {
@@ -100,6 +127,8 @@ test('newApp with git sets up the repo hygiene', (t) => {
   for (const line of ['TASK.md', 'CLAUDE.local.md', '.local/']) assert.ok(exclude.split('\n').includes(line), line);
   const email = execFileSync('git', ['config', '--local', 'user.email'], { cwd: to, encoding: 'utf8' }).trim();
   assert.equal(email, 'someone@users.noreply.github.com');
+  const hooks = execFileSync('git', ['config', '--local', 'core.hooksPath'], { cwd: to, encoding: 'utf8' }).trim();
+  assert.equal(hooks, '.githooks', 'the git hooks are on');
   const log = execFileSync('git', ['status', '--porcelain'], { cwd: to, encoding: 'utf8' });
   assert.ok(log.length > 0, 'files are left uncommitted for a first commit by hand');
 });

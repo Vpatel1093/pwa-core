@@ -69,11 +69,15 @@ def render_png(path, size, inset):
 def render_svg(path, inset):
     rects, rad = tiles(inset)
     hexc = lambda c: "#%02x%02x%02x" % c  # noqa: E731
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">',
-             f'<rect width="100" height="100" rx="22" fill="{hexc(BG)}"/>']
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">',
+        f'<rect width="100" height="100" rx="22" fill="{hexc(BG)}"/>',
+    ]
     for x, y, s, col in rects:
-        parts.append(f'<rect x="{x*100:.2f}" y="{y*100:.2f}" width="{s*100:.2f}" height="{s*100:.2f}" '
-                     f'rx="{rad*100:.2f}" fill="{hexc(col)}"/>')
+        parts.append(
+            f'<rect x="{x * 100:.2f}" y="{y * 100:.2f}" width="{s * 100:.2f}" height="{s * 100:.2f}" '
+            f'rx="{rad * 100:.2f}" fill="{hexc(col)}"/>'
+        )
     parts.append("</svg>\n")
     path.write_text("".join(parts))
 

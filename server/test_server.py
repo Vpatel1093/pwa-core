@@ -12,8 +12,15 @@ from pwacore import server
 
 
 def ev(i, **extra):
-    e = {"id": f"id-{i:04d}", "v": 1, "type": "note.added", "scope_id": "s1", "ts": 1000 + i,
-         "device_id": "dev", "data": {"text": "x"}}
+    e = {
+        "id": f"id-{i:04d}",
+        "v": 1,
+        "type": "note.added",
+        "scope_id": "s1",
+        "ts": 1000 + i,
+        "device_id": "dev",
+        "data": {"text": "x"},
+    }
     e.update(extra)
     return e
 
@@ -55,8 +62,16 @@ class EventStoreTest(unittest.TestCase):
         self.assertEqual([e["id"] for e in third["events"]], ["id-0004"])
         self.assertFalse(third["more"])
         empty = self.store.read_after(third["next"], 2)
-        self.assertEqual(empty, {"events": [], "next": third["next"], "more": False,
-                                 "server_id": self.store.server_id, "head": third["next"]})
+        self.assertEqual(
+            empty,
+            {
+                "events": [],
+                "next": third["next"],
+                "more": False,
+                "server_id": self.store.server_id,
+                "head": third["next"],
+            },
+        )
 
     def test_persists_across_reopen(self):
         self.store.insert([ev(1)])
@@ -90,6 +105,7 @@ class TailnetNameTest(unittest.TestCase):
             if error:
                 raise error
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout)
+
         return run
 
     def test_reads_this_machines_name(self):
@@ -131,7 +147,7 @@ class DamagedDatabaseTest(unittest.TestCase):
         page = 4096
         self.assertGreater(len(raw), 20 * page)
         for p in range(3, len(raw) // page, 2):  # scribble over every other page past the schema
-            raw[p * page + 8:p * page + 64] = b"\xff" * 56
+            raw[p * page + 8 : p * page + 64] = b"\xff" * 56
         self.path.write_bytes(bytes(raw))
         with self.assertRaises(server.DatabaseProblem):
             server.EventStore(self.path)
@@ -277,8 +293,12 @@ class HttpTest(unittest.TestCase):
 
     def test_bad_events_are_rejected_one_by_one(self):
         # One bad event must not block the good ones (or the device's sync).
-        body = b'{"events": [' + json.dumps(ev(400)).encode() + b', {"id": "bad", "type": "x", "ts": "no"}, ' \
+        body = (
+            b'{"events": ['
+            + json.dumps(ev(400)).encode()
+            + b', {"id": "bad", "type": "x", "ts": "no"}, '
             + b'{"id": "sur", "type": "x", "ts": 1, "data": {"s": "\\ud800"}}]}'
+        )
         status, _, reply = self.request("POST", "/api/events", body)
         self.assertEqual(status, 200)
         reply = json.loads(reply)
@@ -383,10 +403,14 @@ class HttpTest(unittest.TestCase):
                 self.assertEqual(status, 421)
 
     def test_post_from_another_origin_is_refused(self):
-        status, _, _ = self.request("POST", "/api/events", {"events": [ev(301)]}, headers={"Origin": "https://evil.example"})
+        status, _, _ = self.request(
+            "POST", "/api/events", {"events": [ev(301)]}, headers={"Origin": "https://evil.example"}
+        )
         self.assertEqual(status, 403)
         port = self.httpd.server_address[1]
-        status, _, _ = self.request("POST", "/api/events", {"events": [ev(302)]}, headers={"Origin": f"http://127.0.0.1:{port}"})
+        status, _, _ = self.request(
+            "POST", "/api/events", {"events": [ev(302)]}, headers={"Origin": f"http://127.0.0.1:{port}"}
+        )
         self.assertEqual(status, 200)
 
     def test_no_directory_listing_and_no_version_banner(self):

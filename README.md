@@ -44,9 +44,10 @@ Then make it your app:
 | `app/sw.js`, `app/manifest.webmanifest`, `app/index.html`, `app/css/` | Offline shell and page | The app, keeping the shell parts |
 | `server/pwacore/` | Sync server and static file server | The core |
 | `server/server.py` | Starts the server with the app's database name and version | The app |
-| `tools/pwacore/` | `build`, `check`, the vendored-copy lock check | The core |
+| `tools/pwacore/` | `build`, `check`, `lint`, the vendored-copy lock check | The core |
 | `tools/new-app.mjs`, `tools/install.mjs` | Start an app; install the core into one (core only) | The core |
 | `tsconfig.json`, `tsconfig.sw.json` | The type check (see Checks). A new app gets them | The app |
+| `eslint.config.js`, `ruff.toml`, `.githooks/` | Lint and the git hooks (see Checks). A new app gets them | The app |
 | `core.lock.json` | In an app: the core version and source, and a sha256 per vendored file | Written by `install.mjs` |
 | `docs/` | [Data format](docs/data-format.md), [data and recovery](docs/data-and-recovery.md) | The core |
 
@@ -76,14 +77,20 @@ Open the `https://<machine>.<tailnet>.ts.net` address and use Add to Home Screen
 
 ```sh
 npm test          # node:test for app logic and tools, unittest for the server
-npm run check     # static check: JS parses, Python compiles, JSON parses; then typecheck
+npm run check     # static check: JS parses, Python compiles, JSON parses; then lint and typecheck
+npm run lint      # ESLint on the JS, ruff (lint and format check) on the Python
 npm run typecheck # tsc on the JSDoc types, strict
 npm run build     # import graph and offline file list, then a copy in dist/
+npm run hooks     # turn on the git hooks (once per clone)
 ```
 
-Tests need Node 20+ (`npm install` once for TypeScript and the test-only IndexedDB fake) and Python 3.9+. `build` is only needed to host the app somewhere other than the Python server.
+Tests need Node 20+ (`npm install` once for TypeScript, ESLint and the test-only IndexedDB fake) and Python 3.9+. Lint also needs [uv](https://docs.astral.sh/uv/): ruff runs as `uvx ruff@<version>`, pinned in `tools/pwacore/lint.mjs`. `build` is only needed to host the app somewhere other than the Python server.
 
 **Types.** The code stays plain JS with no build step. Types are JSDoc comments, and TypeScript only checks them (`checkJs`, `noEmit`, `strict`). `tsconfig.json` covers `app/`, `tools/` and `test/` with the DOM and Node types; `tsconfig.sw.json` covers `app/sw.js` with the WebWorker types, since a page and a worker can't share one global. The shared types (`PwaEvent`, `Store`, `Runtime`, `SyncStatus`) are typedefs in `app/core/`, so an app gets them with the vendored core: `/** @type {import('../core/events.js').PwaEvent} */`. A `@ts-expect-error` carries a one-line reason.
+
+**Lint.** ESLint's recommended rules plus some that catch real bugs (`eqeqeq`, unused variables, promise executor returns, shadowing and others: `eslint.config.js`). ruff checks `server/` and `tools/` for likely bugs (pyflakes, bugbear) and that they are formatted (`ruff format`). Fix a finding in the code; a disable comment carries a reason (`// eslint-disable-next-line rule -- why`). ESLint can't see a promise that is never awaited in JSDoc JS here (that needs typescript-eslint, which doesn't run on TypeScript 7).
+
+**Git hooks.** `npm run hooks` sets `core.hooksPath` to `.githooks/` (`new-app --git` does it for you). `pre-commit` lints the staged files and type-checks if JS is staged: a few seconds. `pre-merge-commit` runs the same for a merge that commits on its own. `pre-push` runs `npm run check` and `npm test`. Both unset git's repo variables (`GIT_DIR`, `GIT_INDEX_FILE` and the rest) first, so a test that runs git can't write into this repo. `--no-verify` skips them once.
 
 **Releasing a change:** bump `APP_VERSION` in `app/js/config.js`, `VERSION` in `app/sw.js` and `APP_VERSION` in `server/server.py` (a test checks they match). Installed copies keep the old code until you bump, then show a "new version" banner. A change to `app/core/` or `server/` also bumps `CORE_VERSION` in `app/core/version.js` and `VERSION` in `server/pwacore/server.py`.
 

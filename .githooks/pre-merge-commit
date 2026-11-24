@@ -1,0 +1,4 @@
+#!/bin/sh
+# pre-merge-commit: a merge that commits on its own (no conflicts) skips
+# pre-commit, so run the same checks on what the merge brings in.
+exec "$(dirname "$0")/pre-commit"

@@ -5,8 +5,10 @@
 // Copies the core (not its git history, data, or local notes) into a new
 // folder and sets the app's name and storage id in every file that holds
 // them. --git also runs git init with the repo hygiene: TASK.md,
-// CLAUDE.local.md and .local/ excluded, and this repo's commit email (a
-// GitHub noreply address) copied over. Nothing is committed.
+// CLAUDE.local.md and .local/ excluded, this repo's commit email (a
+// GitHub noreply address) copied over, and the git hooks in .githooks/ on
+// (npm run hooks does the same later, for an app made without --git).
+// Nothing is committed.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -114,6 +116,7 @@ export function newApp({ from, to, id, name, git = false, email = null }) {
     execFileSync('git', ['init', '-q'], { cwd: to });
     appendFileSync(f('.git/info/exclude'), `${EXCLUDE.join('\n')}\n`);
     if (email) execFileSync('git', ['config', '--local', 'user.email', email], { cwd: to });
+    execFileSync('git', ['config', '--local', 'core.hooksPath', '.githooks'], { cwd: to });
   }
   return to;
 }

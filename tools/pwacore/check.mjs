@@ -1,7 +1,8 @@
 // npm run check: static checks, separate from the tests. Every JS file must
 // parse (node --check), every Python file must compile, and every JSON file
-// must parse. The type check is separate (npm run typecheck: tsc reads the
-// JSDoc types, see tsconfig.json), and npm run check runs it after this.
+// must parse. Lint (npm run lint: ESLint and ruff, see lint.mjs) and the
+// type check (npm run typecheck: tsc reads the JSDoc types, see
+// tsconfig.json) are separate, and npm run check runs them after this.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

@@ -186,7 +186,7 @@ test('a record schedules a sync after the debounce', async () => {
   const { rt } = await boot({ srv, debounceMs: 5 });
   await rt.record(note(rt));
   await rt.record(note(rt));
-  await new Promise((r) => setTimeout(r, 40));
+  await new Promise((r) => { setTimeout(r, 40); });
   assert.equal(srv.rows.length, 2);
   assert.equal(srv.posts, 1, 'a burst of records is one push');
   rt.close();
@@ -197,7 +197,7 @@ test('close cancels a scheduled sync', async () => {
   const { rt } = await boot({ srv, debounceMs: 5 });
   await rt.record(note(rt));
   rt.close();
-  await new Promise((r) => setTimeout(r, 30));
+  await new Promise((r) => { setTimeout(r, 30); });
   assert.equal(srv.posts, 0);
 });
 
@@ -207,7 +207,7 @@ test('other tabs on the same device get recorded, synced, and imported events', 
   const a = await boot({ store, channel: new BroadcastChannel(name) });
   const b = await boot({ store, channel: new BroadcastChannel(name) });
   const e = await a.rt.record(note(a.rt));
-  await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => { setTimeout(r, 20); });
   assert.deepEqual(b.seen.at(-1), { source: 'tab', ids: [e.id] });
   assert.ok(note(b.rt).ts > e.ts, 'the other tab\'s clock moved past it');
   a.rt.close();

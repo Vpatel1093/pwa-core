@@ -105,7 +105,7 @@ test('a replaced server database is repopulated from a device', async () => {
   const phone = device('restart-phone');
   await phone.store.addEvents([noteAdded(phone.ctx, 'restart')], { local: true });
   await phone.sync.syncOnce();
-  const before = (await phone.store.allEvents()).length;
+  const countBefore = (await phone.store.allEvents()).length;
 
   await stopServer(server);
   server = await startServer(join(dir, 'fresh.db')); // new, empty database
@@ -113,7 +113,7 @@ test('a replaced server database is repopulated from a device', async () => {
 
   const laptop = device('restart-laptop');
   await laptop.sync.syncOnce();
-  assert.equal((await laptop.store.allEvents()).length, before);
+  assert.equal((await laptop.store.allEvents()).length, countBefore);
 });
 
 test('the server serves the app shell', async () => {

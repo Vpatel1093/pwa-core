@@ -11,8 +11,10 @@
     "test": "npm run test:js && npm run test:py",
     "test:js": "node --test test/*.test.js",
     "test:py": "python3 -m unittest discover -s server -p 'test_*.py'",
-    "check": "node tools/pwacore/check.mjs && npm run typecheck",
+    "check": "node tools/pwacore/check.mjs && npm run lint && npm run typecheck",
+    "lint": "node tools/pwacore/lint.mjs",
     "typecheck": "tsc -p . && tsc -p tsconfig.sw.json",
+    "hooks": "git config core.hooksPath .githooks",
     "build": "node tools/pwacore/build.mjs",
     "serve": "python3 server/server.py",
     "new-app": "node tools/new-app.mjs",
@@ -20,8 +22,11 @@
     "lock": "node tools/pwacore/lock.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "20.19.43",
+    "eslint": "10.14.0",
     "fake-indexeddb": "^6.2.5",
+    "globals": "17.14.0",
     "typescript": "7.0.2"
   }
 }
