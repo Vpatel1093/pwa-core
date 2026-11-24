@@ -133,6 +133,7 @@ SECURITY_HEADERS = {
 }
 
 CORE_PATHS = frozenset({"/api/events", "/api/health"})
+NO_BODY = frozenset({204, 205, 304})  # statuses that can't carry the JSON body every reply has
 APP_ROUTE_METHODS = ("GET", "POST")
 APP_PATH_RE = re.compile(r"/api/app(/[a-z0-9][a-z0-9_-]*)+")
 
@@ -495,6 +496,8 @@ class Handler(SimpleHTTPRequestHandler):
     def refuse_foreign(self):
         """Send an error and return True if the request's Host/Origin isn't ours."""
         if not host_allowed(self.headers.get("Host"), self.allowed_hosts):
+            if self.command == "POST":
+                self.close_connection = True  # the body is unread
             self.send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "unknown host"})
             return True
         origin = self.headers.get("Origin")
@@ -548,7 +551,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not (isinstance(result, tuple) and len(result) == 2):
             raise TypeError(f"{self.command} {url.path} returned {type(result).__name__}, not (status, object)")
         status, obj = result
-        if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status <= 599:
+        if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status <= 599 or status in NO_BODY:
             raise ValueError(f"{self.command} {url.path} returned status {status!r}")
         return self.send_json(status, obj)
 
@@ -784,8 +787,14 @@ def make_server(
     Both are checked before anything opens: a mistake raises BadHooks."""
     policy = build_csp(csp)
     db_path = Path(db_path)
-    app_routes = build_routes(routes, AppContext(data_dir=db_path.parent, app_id=app_id))
+    # The store first: it makes data/ and refuses another app's database, so the
+    # app's factory only ever runs beside this app's own.
     store = EventStore(db_path, app_id=app_id)
+    try:
+        app_routes = build_routes(routes, AppContext(data_dir=db_path.parent, app_id=app_id))
+    except BaseException:
+        store.close()
+        raise
     extra = frozenset(h.strip().lower() for h in allowed_hosts)
     handler = partial(
         Handler,

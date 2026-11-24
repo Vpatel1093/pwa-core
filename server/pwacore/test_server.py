@@ -782,6 +782,48 @@ class AppHooksValidationTest(unittest.TestCase):
         self.assertEqual(seen[0].data_dir, db.parent)
         self.assertEqual(seen[0].app_id, "demo")
 
+    def test_the_factory_can_open_its_own_sqlite_file_in_a_fresh_data_folder(self):
+        import sqlite3
+
+        def routes(ctx):
+            conn = sqlite3.connect(ctx.data_dir / "inbox.db", check_same_thread=False)
+            self.addCleanup(conn.close)
+            return []
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "data" / "e.db"  # data/ doesn't exist yet, as in a new app
+        httpd = server.make_server("127.0.0.1", 0, db, Path(tmp.name), quiet=True, routes=routes)
+        self.addCleanup(httpd.store.close)
+        self.addCleanup(httpd.server_close)
+        self.assertTrue((db.parent / "inbox.db").exists())
+
+    def test_the_factory_never_runs_against_another_apps_database(self):
+        calls = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "e.db"
+        server.EventStore(db, app_id="first").close()
+        with self.assertRaises(server.WrongApp):
+            server.make_server("127.0.0.1", 0, db, Path(tmp.name), quiet=True, app_id="second", routes=calls.append)
+        self.assertEqual(calls, [])
+
+    def test_a_failing_factory_closes_the_store(self):
+        def routes(ctx):
+            raise RuntimeError("cannot open")
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        closed = []
+        real = server.EventStore.close
+        server.EventStore.close = lambda store: (closed.append(store), real(store))
+        try:
+            with self.assertRaises(RuntimeError):
+                server.make_server("127.0.0.1", 0, Path(tmp.name) / "e.db", Path(tmp.name), quiet=True, routes=routes)
+        finally:
+            server.EventStore.close = real
+        self.assertEqual(len(closed), 1)
+
     def test_bad_csp_extras_are_refused_at_startup(self):
         cases = {
             "script-src": {"script-src": ["https://x.example"]},
@@ -862,6 +904,10 @@ class AppRoutesHttpTest(unittest.TestCase):
             cls.calls.append(req)
             return 99, {}
 
+        def no_content(req):
+            cls.calls.append(req)
+            return 204, None  # a 204 can't carry the JSON body every reply has
+
         def not_a_tuple(req):
             cls.calls.append(req)
             return {"ok": True}
@@ -874,6 +920,7 @@ class AppRoutesHttpTest(unittest.TestCase):
                 server.Route("GET", "/api/app/boom", boom),
                 server.Route("GET", "/api/app/nan", nan),
                 server.Route("GET", "/api/app/bad-status", bad_status),
+                server.Route("GET", "/api/app/no-content", no_content),
                 server.Route("GET", "/api/app/not-a-tuple", not_a_tuple),
             ]
 
@@ -923,7 +970,7 @@ class AppRoutesHttpTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)), (201, {"ok": True}))
         self.assertEqual(len(self.calls), 3)
 
-    def test_the_request_is_read_only(self):
+    def test_the_request_fields_cant_be_reassigned(self):
         self.request("GET", "/api/app/echo")
         with self.assertRaises(AttributeError):
             self.calls[0].path = "/x"
@@ -1028,7 +1075,13 @@ class AppRoutesHttpTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_app_errors_become_a_plain_500_and_the_server_keeps_going(self):
-        for path in ["/api/app/boom", "/api/app/nan", "/api/app/bad-status", "/api/app/not-a-tuple"]:
+        for path in [
+            "/api/app/boom",
+            "/api/app/nan",
+            "/api/app/bad-status",
+            "/api/app/no-content",
+            "/api/app/not-a-tuple",
+        ]:
             with self.subTest(path):
                 status, _, body = self.request("GET", path)
                 self.assertEqual(status, 500)
