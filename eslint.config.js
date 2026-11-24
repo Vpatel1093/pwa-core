@@ -24,7 +24,8 @@ export default [
       'no-use-before-define': ['error', { functions: false, classes: false, variables: false }],
       'no-var': 'error',
       'prefer-const': 'error',
-      'no-shadow': ['error', { builtinGlobals: false }],
+      // `_` is the name for a parameter that is not used, so nested callbacks may reuse it.
+      'no-shadow': ['error', { builtinGlobals: false, allow: ['_'] }],
       'no-throw-literal': 'error',
       'prefer-promise-reject-errors': 'error',
       radix: 'error',
