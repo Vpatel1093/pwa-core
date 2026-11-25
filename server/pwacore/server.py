@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable, NamedTuple
 from urllib.parse import parse_qs, urlsplit
 
-VERSION = "0.1.5"  # core version; matches app/core/version.js (a test checks)
+VERSION = "0.1.6"  # core version; matches app/core/version.js (a test checks)
 ROOT = Path(__file__).resolve().parent.parent.parent  # the app: <root>/server/pwacore/server.py
 DEFAULT_DB_NAME = "events.db"
 DEFAULT_PORT = 8765  # an app's launcher passes its own PORT; one without that line runs here
