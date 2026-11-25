@@ -123,6 +123,81 @@ class AuthorizeValidationTest(unittest.TestCase):
         self.assertEqual(dict(req.headers), {})
 
 
+class ReceivedByStoreTest(unittest.TestCase):
+    """Each stored event keeps who sent it, in its own column beside the body."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "e.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def open(self):
+        store = server.EventStore(self.path)
+        self.addCleanup(store.close)
+        return store
+
+    def test_each_event_keeps_who_sent_it_and_a_page_lists_them_in_order(self):
+        store = self.open()
+        store.insert([base.ev(1), base.ev(2)], received_by="alice")
+        store.insert([base.ev(3)], received_by="local")
+        store.insert([base.ev(4)])
+        page = store.read_after(0, 10, received_by=True)
+        self.assertEqual([e["id"] for e in page["events"]], ["id-0001", "id-0002", "id-0003", "id-0004"])
+        self.assertEqual(page["received_by"], ["alice", "alice", "local", None])
+        page = store.read_after(1, 2, received_by=True)
+        self.assertEqual((len(page["events"]), page["received_by"]), (2, ["alice", "local"]))
+        self.assertNotIn("received_by", store.read_after(0, 10), "only when asked")
+
+    def test_the_first_copy_keeps_its_sender(self):
+        store = self.open()
+        store.insert([base.ev(1)], received_by="alice")
+        self.assertEqual(store.insert([base.ev(1)], received_by="bob"), 0)
+        self.assertEqual(store.read_after(0, 10, received_by=True)["received_by"], ["alice"])
+
+    def test_the_body_is_stored_as_sent_even_with_a_field_of_that_name(self):
+        # An event's own fields are the app's. A client can write anything there,
+        # so the server's answer lives beside the event, never inside it.
+        store = self.open()
+        e = base.ev(1, received_by="owner")
+        store.insert([e], received_by="bob")
+        page = store.read_after(0, 10, received_by=True)
+        self.assertEqual((page["events"], page["received_by"]), ([e], ["bob"]))
+
+    def test_a_database_from_before_gets_the_column_and_its_rows_stay_as_they_were(self):
+        import sqlite3
+
+        old = sqlite3.connect(self.path)
+        old.executescript(
+            """CREATE TABLE events (
+                   seq  INTEGER PRIMARY KEY AUTOINCREMENT,
+                   id   TEXT NOT NULL UNIQUE,
+                   body TEXT NOT NULL,
+                   received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+               );
+               CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+               INSERT INTO meta VALUES ('server_id', 'srv-old');"""
+        )
+        rows = [(e["id"], server.to_json(e)) for e in (base.ev(1), base.ev(2))]
+        old.executemany("INSERT INTO events (id, body) VALUES (?, ?)", rows)
+        old.commit()
+        before = old.execute("SELECT seq, id, body, received_at FROM events ORDER BY seq").fetchall()
+        old.close()
+
+        store = self.open()
+        self.assertEqual(store.server_id, "srv-old")
+        store.insert([base.ev(3)], received_by="alice")
+        self.assertEqual(store.read_after(0, 10, received_by=True)["received_by"], [None, None, "alice"])
+        store.close()
+        db = sqlite3.connect(self.path)
+        rows = db.execute("SELECT seq, id, body, received_at, received_by FROM events ORDER BY seq").fetchall()
+        db.close()
+        self.assertEqual([r[:4] for r in rows[:2]], before, "old rows untouched")
+        self.assertEqual([r[4] for r in rows], [None, None, "alice"])
+        self.open()  # opens again: the column is there already
+
+
 class AuthorizeHttpTest(unittest.TestCase):
     """The hook runs on every route, after the Host and Origin checks."""
 
@@ -263,6 +338,21 @@ class AuthorizeHttpTest(unittest.TestCase):
                 reply += chunk
         self.assertIn(b" 403 ", reply.split(b"\r\n")[0] + b" ")  # and the read above ended: closed
 
+    def test_pull_lists_who_sent_each_event_beside_the_events(self):
+        start = self.httpd.store.read_after(0, 1000)["next"]
+        mine = base.ev(500, received_by="owner")  # an app field a client wrote: proves nothing
+        self.request("POST", "/api/events", {"events": [mine, base.ev(501)]}, headers=via_serve("bob@example.com"))
+        self.request("POST", "/api/events", {"events": [base.ev(502)]})
+        self.request("POST", "/api/events", {"events": [base.ev(501)]}, headers=via_serve("alice@example.com"))
+        status, _, reply = self.request("GET", f"/api/events?after={start}", headers=via_serve("alice@example.com"))
+        page = json.loads(reply)
+        self.assertEqual(status, 200)
+        self.assertEqual(page["events"], [mine, base.ev(501), base.ev(502)], "events as sent")
+        self.assertEqual(page["received_by"], ["bob", "bob", "local"])
+        _, _, reply = self.request("GET", f"/api/events?after={start}&limit=1")
+        page = json.loads(reply)
+        self.assertEqual((len(page["events"]), page["received_by"]), (1, ["bob"]))
+
     def test_the_host_check_still_comes_first(self):
         status, _, _ = self.request("GET", "/api/health", headers={"Host": "evil.example"})
         self.assertEqual(status, 421)
@@ -315,6 +405,11 @@ class NoHookTest(unittest.TestCase):
                 for headers in [{}, via_serve("eve@example.com"), via_serve(None)]:
                     self.assertEqual(base.HttpTest.request(t, "GET", "/api/app/whoami", headers=headers)[0], 200)
                     self.assertEqual(base.HttpTest.request(t, "GET", "/api/events?after=0", headers=headers)[0], 200)
+                base.HttpTest.request(t, "POST", "/api/events", {"events": [base.ev(1)]})
+                _, _, reply = base.HttpTest.request(t, "GET", "/api/events?after=0")
+                page = json.loads(reply)
+                self.assertEqual(sorted(page), ["after_id", "app_id", "events", "head", "more", "next", "server_id"])
+                self.assertEqual(httpd.store.read_after(0, 10, received_by=True)["received_by"], [None])
             finally:
                 httpd.shutdown()
                 httpd.server_close()

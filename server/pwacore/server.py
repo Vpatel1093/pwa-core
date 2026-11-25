@@ -300,6 +300,10 @@ class EventStore:
                    received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                )"""
         )
+        # Who sent each event: the principal the app's authorize hook named.
+        # NULL with no hook, and for rows from before the column.
+        if "received_by" not in {row[1] for row in self._db.execute("PRAGMA table_info(events)")}:
+            self._db.execute("ALTER TABLE events ADD COLUMN received_by TEXT")
         self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('server_id', ?)", (str(uuid.uuid4()),))
         self._db.commit()
@@ -317,12 +321,14 @@ class EventStore:
             self._db.close()
             raise WrongApp(f"{path} holds the events of app '{self.app_id}', not '{app_id}'")
 
-    def insert(self, events):
+    def insert(self, events, received_by=None):
+        """Store new events; received_by is who sent them. An id already stored
+        keeps its first copy, and that copy's sender."""
         with self._lock, self._db:
             before = self._db.total_changes
             self._db.executemany(
-                "INSERT OR IGNORE INTO events (id, body) VALUES (?, ?)",
-                [(e["id"], to_json(e)) for e in events],
+                "INSERT OR IGNORE INTO events (id, body, received_by) VALUES (?, ?, ?)",
+                [(e["id"], to_json(e), received_by) for e in events],
             )
             return self._db.total_changes - before
 
@@ -331,17 +337,20 @@ class EventStore:
             self.server_id = str(uuid.uuid4())
             self._db.execute("UPDATE meta SET value = ? WHERE key = 'server_id'", (self.server_id,))
 
-    def read_after(self, after, limit):
+    def read_after(self, after, limit, received_by=False):
+        """A page of events. received_by=True adds "received_by": who sent each
+        one, in the same order as "events" (beside them, never inside: an
+        event's own fields are what a client wrote)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT seq, body FROM events WHERE seq > ? ORDER BY seq LIMIT ?", (after, limit + 1)
+                "SELECT seq, body, received_by FROM events WHERE seq > ? ORDER BY seq LIMIT ?", (after, limit + 1)
             ).fetchall()
             head = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
             at = self._db.execute("SELECT id FROM events WHERE seq = ?", (after,)).fetchone()
         more = len(rows) > limit
         rows = rows[:limit]
-        return {
-            "events": [json.loads(body) for _, body in rows],
+        page = {
+            "events": [json.loads(body) for _, body, _ in rows],
             "next": rows[-1][0] if rows else after,
             "more": more,
             "server_id": self.server_id,
@@ -354,6 +363,9 @@ class EventStore:
             # --new-server-id whose cursor numbers now name other events.
             "after_id": at[0] if at else None,
         }
+        if received_by:
+            page["received_by"] = [who for _, _, who in rows]
+        return page
 
     def close(self):
         with self._lock:
@@ -758,7 +770,8 @@ class Handler(SimpleHTTPRequestHandler):
                 limit = min(max(int(q.get("limit", [str(DEFAULT_PAGE)])[0]), 1), MAX_BATCH)
             except ValueError:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"error": "after and limit must be integers"})
-            return self.send_json(HTTPStatus.OK, self.store.read_after(after, limit))
+            page = self.store.read_after(after, limit, received_by=self.authorize is not None)
+            return self.send_json(HTTPStatus.OK, page)
         if url.path.startswith("/api/app/"):
             return self.serve_app_route(url)
         return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -795,7 +808,7 @@ class Handler(SimpleHTTPRequestHandler):
                 ):
                     event_id = None  # not echoed back if it isn't a sound id (it might not even encode)
                 rejected.append({"index": i, "id": event_id, "reason": reason})
-        inserted = self.store.insert(good)
+        inserted = self.store.insert(good, received_by=self.principal)
         return self.send_json(
             HTTPStatus.OK, {"received": len(body["events"]), "inserted": inserted, "rejected": rejected}
         )
