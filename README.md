@@ -64,7 +64,7 @@ python3 server/server.py            # http://127.0.0.1:<PORT>
 
 The port is the `PORT =` line in `server/server.py` (8765 here, and for an app without that line). Data goes to `data/events.db` (gitignored). Options: `--port`, `--db <file>`, `--host` (keep it on 127.0.0.1), `--allow-host <name>`, `--new-server-id`.
 
-There is no login. Anyone who can reach the server can read and change everything. The server only answers requests for a loopback name or this machine's Tailscale name, which it gets from the `tailscale` command at startup. That stops web pages from reaching it through DNS tricks.
+There is no login of its own. Without an `authorize` hook (see [Who is asking](#who-is-asking)), anyone who can reach the server can read and change everything. The server only answers requests for a loopback name or this machine's Tailscale name, which it gets from the `tailscale` command at startup. That stops web pages from reaching it through DNS tricks.
 
 To use it on your phone, put it on your tailnet with HTTPS:
 
@@ -100,11 +100,36 @@ if __name__ == "__main__":
 
 - **Paths** are exact and live under `/api/app/` (lower case letters, digits, `-`, `_`), so a later core route can't collide with one. Use query parameters, not path parameters. GET and POST only. HEAD never runs an app route; GET or POST on a path that only has the other gets a 405, and any other method a 501.
 - **Checks.** An app route gets every check a core route gets, before `fn` runs: the Host check, the Origin check on POST, `?app=` (so the query name `app` is the core's), and for a POST the Content-Length, 2MB, `application/json` and JSON rules. It also refuses a request that a page on another site made (`Sec-Fetch-Site` `cross-site` or `same-site`: another app on this machine is same-site), because an `<img>` or a link sends no Origin and a GET may have a cost. A client that sends no fetch metadata, such as an iOS Shortcut or curl, is let through; it must send JSON. Browsers send fetch metadata only to HTTPS or loopback addresses, and Safari only from 16.4, so over plain HTTP (an `--allow-host` LAN name) or on an older iPhone a cross-site GET gets through. Keep a GET free of side effects and cost where you can; a POST also has the Origin check.
-- **The request** (`req.method`, `req.path`, `req.query` as lists of values, `req.body`, parsed JSON or None): its fields can't be reassigned, and `fn` should not change them. Replies are JSON with the core's headers and `no-store`, so 204, 205 and 304 are refused. An exception, a bad status or a value JSON can't hold becomes a plain 500; the details go to the server log only. Never put an upstream error or an API key in a reply.
+- **The request** (`req.method`, `req.path`, `req.query` as lists of values, `req.body`, parsed JSON or None, `req.principal`, `req.headers`; see [Who is asking](#who-is-asking)): its fields can't be reassigned, and `fn` should not change them. Replies are JSON with the core's headers and `no-store`, so 204, 205 and 304 are refused. An exception, a bad status or a value JSON can't hold becomes a plain 500; the details go to the server log only. Never put an upstream error or an API key in a reply.
 - **Threads.** Each connection has its own thread, so `fn` runs on many at once. Guard shared state with a lock, as the core's `EventStore` does, or open SQLite with WAL and a busy timeout.
 - **CSP.** `csp` adds https origins (optionally `https://*.example.com`, with a port) to `img-src`, `connect-src`, `font-src`, `media-src`, `style-src` or `frame-src`. A directive the base lacks starts from `'self'`. `script-src`, `default-src`, `worker-src` and the locked directives can't change, and anything else is refused. The service worker serves the cached page with its old headers, so a CSP change shows only after a new app version.
 - A mistake in `routes` or `csp` stops the server at startup. Test them in the app (a `server/test_*.py` that calls `make_server` with them), so the deploy tests catch it, not the server start.
 - A route goes into the core only when every app needs it. What the app stores itself, and what that means for backups: [docs/data-format.md](docs/data-format.md).
+
+## Who is asking
+
+`tailscale serve` tells the server who sent a request: it adds `Tailscale-User-Login` (the tailnet user's login) and drops any copy the client sent. An app that shares its server with other people passes an `authorize` hook:
+
+```python
+PEOPLE = {"alice@example.com": "alice", "bob@example.com": "bob"}  # login -> person
+
+
+def authorize(headers):  # called on every request
+    return PEOPLE.get(headers.get("Tailscale-User-Login"))  # a principal, or None
+
+
+if __name__ == "__main__":
+    main(..., authorize=authorize)
+```
+
+- **Every route.** The core asks the hook on every request: the app's files, `/api/events`, `/api/health` and app routes, after the Host and Origin checks and before anything else. `headers` is read-only, and names are case-insensitive (a header sent twice reads as one value joined with `, `).
+- **The answer** is a principal (a printable string of 1 to 100 characters) or None. A principal lets the request in. None gets a 403 `{"error": "not allowed"}`, unless the request is local (below). Anything else, or an exception, is a plain 500.
+- **Local requests** are `local` when the hook names no one, so the CLI, scripts and tests on this machine need no login. Local means all of: the connection is from loopback, the Host is a loopback name (`127.0.0.1`, `localhost`, `[::1]`), and there is no `Tailscale-User-Login`, `X-Forwarded-For` or `Forwarded` header. `tailscale serve` also connects from loopback, but it adds `X-Forwarded-For` to every request it passes on, and its Host is the tailnet name. So a request through serve with no login (a tagged device, or `tailscale funnel`) is never local: the hook must name it, or it gets a 403. The hook's answer comes first, so an app can name a local request too; `local` is only the fallback.
+- **Trust.** The login is only as good as the path it came by. Through `tailscale serve` it is Tailscale's. A program on this machine can send any header it likes, but it can also read the database file. Keep `--host` on 127.0.0.1: a request from another address is never local, and its headers came from that client.
+- **In app routes**, `req.principal` is the hook's answer (or `local`) and `req.headers` the same read-only headers. With no hook, `req.principal` is None.
+- **Who sent each event.** The server stores the principal of each push beside each event it stores (a `received_by` column; the body is stored as sent). With a hook, a pull page has `"received_by"`: one entry per event, in the order of `"events"`, None for events stored before the hook or the column. It is never a field inside an event: an event's own fields are what a client wrote, and devices keep, export and push back every one of them. Devices don't keep `received_by` yet; an app that needs it reads it from the pull reply.
+- **No hook** keeps the old behavior: everyone who passes the Host check gets in, `req.principal` is None, a pull page has no `received_by`, and stored events get NULL.
+- **Not covered:** a 403 is JSON, also for a page load; there is no friendlier page yet. An event pushed again (after a restore, see [docs/data-and-recovery.md](docs/data-and-recovery.md)) is stored with the principal of the device that pushed it again.
 
 ## Checks
 

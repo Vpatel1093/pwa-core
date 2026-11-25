@@ -17,7 +17,7 @@ The core sets the event envelope (below) and its own stores. It never sets the s
 | browser, IndexedDB database named `APP_ID` | `events` | the full log |
 | | `outbox` | ids of local events not pushed yet |
 | | `meta` | the core's own keys (`deviceId`, `clockLast`, `serverId`, `pullCursor`, `pullCursorId`, `lastSyncAt`, `lastExportAt`, `rejected`); a newer core may add more |
-| server, `data/<DB_NAME>` (SQLite) | `events` | the log, in the order the server stored it |
+| server, `data/<DB_NAME>` (SQLite) | `events` | the log, in the order the server stored it; each row keeps the body as sent and `received_by`, who pushed it (the app's `authorize` hook; NULL without one, and for rows from before the column) |
 | | `meta` | `server_id`, `app_id` |
 
 These belong to the core. An app does not add stores, tables or `meta` keys to them, and does not read them except through the core's functions. A newer core may change them.
@@ -64,7 +64,7 @@ An edit passes `after` (the winning event's `ts`) to `makeEvent`. The new event 
 
 `POST /api/events` takes `{"events": [...]}` (up to 1000 events, 2MB). It stores every acceptable event, ignores ids it already has, and lists the rest in `rejected`. Sending a rejected event again won't help, so it leaves the outbox (it can't block the events behind it) but is kept: the device lists it, with its core version, in meta `rejected` (diagnostics shows it). A newer core sends it again, and a server that still refuses it puts it back on the list. The event itself stays on the device either way.
 
-`GET /api/events?after=<cursor>&limit=<n>` pages through events in the order the server stored them. Each page has `next`, `more`, `server_id`, `app_id`, `head` and `after_id` (the id of the event at the cursor).
+`GET /api/events?after=<cursor>&limit=<n>` pages through events in the order the server stored them. Each page has `next`, `more`, `server_id`, `app_id`, `head` and `after_id` (the id of the event at the cursor). A server with an `authorize` hook adds `received_by`: who pushed each event, one entry per event in the order of `events` (README "Who is asking"). It is beside the events, never inside one, so devices store, export and push back each event exactly as it was sent.
 
 Both take `app=<APP_ID>`. The database keeps the app id it was first started with (`APP_ID` in `server/server.py`), and a request that names another app gets a 409, so two apps' events never mix. A request with no `app` (an older client) is let through.
 

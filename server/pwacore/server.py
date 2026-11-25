@@ -18,7 +18,9 @@ API
                                                     "after_id": id of the event at the cursor}
 
 An app adds its own routes under /api/app/ and CSP sources: main(routes=, csp=),
-see make_server and README "App routes and CSP".
+see make_server and README "App routes and CSP". With main(authorize=fn), the
+core asks fn(headers) who is asking on every request (README "Who is asking"),
+and a pull page also has "received_by": who sent each event, in the same order.
 
 Events are deduplicated by id; the first copy of an id is kept. A push stores
 every acceptable event and lists the rest in "rejected" (retrying won't help
@@ -29,8 +31,8 @@ delete any <db>-wal / -shm files next to it, and start once with
 --new-server-id so every device pushes its events again (the backup is
 missing whatever came after it). See docs/data-and-recovery.md.
 
-There is no login: whoever can reach the port can read and write everything.
-Keep it on 127.0.0.1 and reach it only through your own tailnet. Requests must
+With no authorize hook there is no login: whoever can reach the port can read
+and write everything. Keep it on 127.0.0.1 and reach it only through your own tailnet. Requests must
 name a loopback host or this machine's Tailscale name, asked of the tailscale
 CLI at startup (blocks DNS rebinding from a web page), and POSTs from another
 origin are refused.
