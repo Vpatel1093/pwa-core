@@ -37,6 +37,7 @@ origin are refused.
 """
 
 import argparse
+import ipaddress
 import json
 import queue
 import re
@@ -46,7 +47,8 @@ import sys
 import threading
 import traceback
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import partial
 from http import HTTPStatus
@@ -71,6 +73,11 @@ MAX_CURSOR = 2**63 - 1  # SQLite INTEGER range
 DEFAULT_PAGE = 500
 MAX_CONNECTIONS = 64  # open at once; each holds a thread (a browser opens about 6)
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+LOCAL = "local"  # the principal of a local client when the hook names no one (see is_local)
+# Headers a proxy adds. tailscale serve sets X-Forwarded-For on every request it
+# passes on, and Tailscale-User-Login for a tailnet user (never for a tagged
+# device or a funnel request). A request with any of them is not local.
+PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded")
 
 # The base CSP, in order. An app may add sources to the fetch directives in
 # CSP_EXTENDABLE (one it doesn't have yet starts from 'self'); the rest are locked.
@@ -155,6 +162,41 @@ class AppContext:
     app_id: Any  # str, or None for an app that doesn't name one
 
 
+class Headers(Mapping):
+    """A request's headers, read-only. Names are case-insensitive; a header
+    sent more than once reads as one value joined with ", " (as HTTP defines
+    it). Iterating gives the names in lower case."""
+
+    def __init__(self, items=None):
+        self._items = {k.lower(): v for k, v in (items or {}).items()}
+
+    @classmethod
+    def from_message(cls, message):
+        joined = {}
+        for name, value in message.items():
+            key = name.lower()
+            joined[key] = f"{joined[key]}, {value}" if key in joined else value
+        return cls(joined)
+
+    def __getitem__(self, name):
+        return self._items[name.lower()]
+
+    def __contains__(self, name):
+        return isinstance(name, str) and name.lower() in self._items
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __repr__(self):
+        return f"Headers({self._items!r})"
+
+
+NO_HEADERS = Headers()
+
+
 @dataclass(frozen=True)
 class AppRequest:
     """What an app route's fn gets."""
@@ -163,6 +205,34 @@ class AppRequest:
     path: str
     query: dict  # name -> list of values, as parse_qs gives
     body: Any  # the parsed JSON for a POST; None for a GET
+    principal: Any = None  # who is asking (str), from the authorize hook; None when there is no hook
+    headers: Headers = field(default_factory=Headers)  # the request's headers, read-only
+
+
+def is_local(peer, headers):
+    """A local client: the CLI, a test, curl on this machine. It connects from
+    loopback, names a loopback host, and carries no proxy header. tailscale
+    serve also connects from loopback, but always adds X-Forwarded-For (and its
+    Host is the tailnet name, unless a client forged it), so nothing that came
+    through serve is local: a tagged device or a funnel request has no login,
+    and must not pass as this machine."""
+    try:
+        ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 on a dual-stack socket
+    if not ip.is_loopback:
+        return False
+    if any(name in headers for name in PROXY_HEADERS):
+        return False
+    return host_allowed(headers.get("host"))
+
+
+def check_principal(who):
+    """The hook's answer: None (no one it knows) or a short printable string."""
+    if who is None or (isinstance(who, str) and is_id(who) and who.isprintable()):
+        return who
+    raise ValueError(f"authorize returned {who!r}: it must return None or a short printable string")
 
 
 def build_routes(routes, ctx):
@@ -465,9 +535,13 @@ class Handler(SimpleHTTPRequestHandler):
         app_version=VERSION,
         app_routes=None,
         csp=SECURITY_HEADERS["Content-Security-Policy"],
+        authorize=None,
         **kwargs,
     ):
         self.store = store
+        self.authorize = authorize
+        self.principal = None
+        self.request_headers = NO_HEADERS
         self.app_version = app_version
         self.allowed_hosts = allowed_hosts
         self.quiet = quiet
@@ -511,6 +585,25 @@ class Handler(SimpleHTTPRequestHandler):
             return True
         return False
 
+    def refuse_unknown(self):
+        """Ask the app's authorize hook who this is; send a 403 and return True
+        if it is no one. The hook's answer comes first; a local client it names
+        no one is LOCAL. With no hook, everyone gets in (and principal is None)."""
+        self.request_headers = Headers.from_message(self.headers)
+        self.principal = None
+        if self.authorize is None:
+            return False
+        who = check_principal(self.authorize(self.request_headers))
+        if who is None and is_local(self.client_address[0], self.request_headers):
+            who = LOCAL
+        if who is None:
+            if self.command == "POST":
+                self.close_connection = True  # the body is unread
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": "not allowed"})
+            return True
+        self.principal = who
+        return False
+
     def refuse_cross_site(self):
         """App routes only: refuse a request a page on another site made. An
         <img> or link sends no Origin, and a GET route may have a cost (a paid
@@ -546,7 +639,7 @@ class Handler(SimpleHTTPRequestHandler):
             if self.refuse_other_app(url.query):
                 return None
             body = None
-        req = AppRequest(self.command, url.path, parse_qs(url.query), body)
+        req = AppRequest(self.command, url.path, parse_qs(url.query), body, self.principal, self.request_headers)
         result = fn(req)
         if not (isinstance(result, tuple) and len(result) == 2):
             raise TypeError(f"{self.command} {url.path} returned {type(result).__name__}, not (status, object)")
@@ -640,7 +733,7 @@ class Handler(SimpleHTTPRequestHandler):
             return REPLIED
 
     def do_GET(self):
-        if self.refuse_foreign():
+        if self.refuse_foreign() or self.refuse_unknown():
             return
         url = urlsplit(self.path)
         if not url.path.startswith("/api/"):
@@ -671,12 +764,12 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_HEAD(self):
-        if self.refuse_foreign():
+        if self.refuse_foreign() or self.refuse_unknown():
             return
         return super().do_HEAD()
 
     def do_POST(self):
-        if self.refuse_foreign():
+        if self.refuse_foreign() or self.refuse_unknown():
             return
         url = urlsplit(self.path)
         if url.path.startswith("/api/app/"):
@@ -786,11 +879,16 @@ def make_server(
     max_connections=MAX_CONNECTIONS,
     routes=None,
     csp=None,
+    authorize=None,
 ):
     """routes: the app's factory routes(ctx) -> [Route, ...], called once here
     with an AppContext. csp: {directive: [https origins]} added to the base CSP.
-    Both are checked before anything opens: a mistake raises BadHooks."""
+    authorize: fn(headers) -> principal or None, asked on every request (see
+    Handler.refuse_unknown and is_local). All are checked before anything
+    opens: a mistake raises BadHooks."""
     policy = build_csp(csp)
+    if authorize is not None and not callable(authorize):
+        raise BadHooks("authorize must be a function authorize(headers) -> principal (a short string) or None")
     db_path = Path(db_path)
     # The store first: it makes data/ and refuses another app's database, so the
     # app's factory only ever runs beside this app's own.
@@ -809,6 +907,7 @@ def make_server(
         app_version=app_version,
         app_routes=app_routes,
         csp=policy,
+        authorize=authorize,
         directory=str(static_dir),
     )
     httpd = CappedServer((host, port), handler, max_connections=max_connections)
@@ -845,8 +944,8 @@ def serve_hint(port, tailnet):
     )
 
 
-# db_name, app_version, app_id, port, routes and csp come from the app's
-# server/server.py. See make_server for routes and csp.
+# db_name, app_version, app_id, port, routes, csp and authorize come from the
+# app's server/server.py. See make_server for routes, csp and authorize.
 def main(
     argv=None,
     *,
@@ -857,6 +956,7 @@ def main(
     port=DEFAULT_PORT,
     routes=None,
     csp=None,
+    authorize=None,
 ):
     args = parse_args(argv, db_name=db_name, description=description, port=port)
     try:
@@ -871,6 +971,7 @@ def main(
             app_id=app_id,
             routes=routes,
             csp=csp,
+            authorize=authorize,
         )
     except BadHooks as err:
         sys.exit(f"server/server.py: {err}")
