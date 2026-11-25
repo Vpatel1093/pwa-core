@@ -32,10 +32,10 @@ delete any <db>-wal / -shm files next to it, and start once with
 missing whatever came after it). See docs/data-and-recovery.md.
 
 With no authorize hook there is no login: whoever can reach the port can read
-and write everything. Keep it on 127.0.0.1 and reach it only through your own tailnet. Requests must
-name a loopback host or this machine's Tailscale name, asked of the tailscale
-CLI at startup (blocks DNS rebinding from a web page), and POSTs from another
-origin are refused.
+and write everything. Keep it on 127.0.0.1 and reach it only through your own
+tailnet. Requests must name a loopback host or this machine's Tailscale name,
+asked of the tailscale CLI at startup (blocks DNS rebinding from a web page),
+and POSTs from another origin are refused.
 """
 
 import argparse
@@ -76,10 +76,17 @@ DEFAULT_PAGE = 500
 MAX_CONNECTIONS = 64  # open at once; each holds a thread (a browser opens about 6)
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 LOCAL = "local"  # the principal of a local client when the hook names no one (see is_local)
-# Headers a proxy adds. tailscale serve sets X-Forwarded-For on every request it
-# passes on, and Tailscale-User-Login for a tailnet user (never for a tagged
-# device or a funnel request). A request with any of them is not local.
-PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded")
+# Headers a proxy adds. tailscale serve (HTTP mode) sets X-Forwarded-For and
+# X-Forwarded-Host on every request it passes on, Tailscale-User-Login for a
+# tailnet user (never for a tagged device or a funnel request) and
+# Tailscale-Funnel-Request for a funnel one. A request with any of them is not local.
+PROXY_HEADERS = (
+    "tailscale-user-login",
+    "tailscale-funnel-request",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "forwarded",
+)
 
 # The base CSP, in order. An app may add sources to the fetch directives in
 # CSP_EXTENDABLE (one it doesn't have yet starts from 'self'); the rest are locked.
@@ -218,16 +225,29 @@ def is_local(peer, headers):
     Host is the tailnet name, unless a client forged it), so nothing that came
     through serve is local: a tagged device or a funnel request has no login,
     and must not pass as this machine."""
+    if not is_loopback_peer(peer):
+        return False
+    if any(name in headers for name in PROXY_HEADERS):
+        return False
+    return host_allowed(headers.get("host"))
+
+
+def is_loopback_peer(peer):
     try:
         ip = ipaddress.ip_address(peer)
     except ValueError:
         return False
     ip = getattr(ip, "ipv4_mapped", None) or ip  # ::ffff:127.0.0.1 on a dual-stack socket
-    if not ip.is_loopback:
-        return False
-    if any(name in headers for name in PROXY_HEADERS):
-        return False
-    return host_allowed(headers.get("host"))
+    return ip.is_loopback
+
+
+def hook_headers(peer, headers):
+    """The headers the hook (and an app route) sees. Only tailscale serve, from
+    loopback, vouches for Tailscale-* headers; from another peer (the server
+    bound past loopback) the client wrote them, so they are dropped."""
+    if is_loopback_peer(peer):
+        return headers
+    return Headers({k: v for k, v in headers.items() if not k.startswith("tailscale-")})
 
 
 def check_principal(who):
@@ -603,7 +623,7 @@ class Handler(SimpleHTTPRequestHandler):
         """Ask the app's authorize hook who this is; send a 403 and return True
         if it is no one. The hook's answer comes first; a local client it names
         no one is LOCAL. With no hook, everyone gets in (and principal is None)."""
-        self.request_headers = Headers.from_message(self.headers)
+        self.request_headers = hook_headers(self.client_address[0], Headers.from_message(self.headers))
         self.principal = None
         if self.authorize is None:
             return False

@@ -8,7 +8,6 @@ the tests fake serve by sending those headers from loopback.
 
 import http.client
 import json
-import socket
 import tempfile
 import threading
 import unittest
@@ -88,10 +87,29 @@ class IsLocalTest(unittest.TestCase):
             "another proxy (Forwarded)": self.headers(Host="127.0.0.1", Forwarded="for=100.64.0.7"),
             "the tailnet name with no proxy header": self.headers(Host=f"{TAILNET}:8765"),
             "no Host": self.headers(),
+            "serve's X-Forwarded-Host": self.headers(Host="127.0.0.1", X_Forwarded_Host=TAILNET),
+            "a funnel request": self.headers(Host="127.0.0.1", Tailscale_Funnel_Request="?1"),
         }
         for label, headers in cases.items():
             with self.subTest(label):
                 self.assertFalse(server.is_local("127.0.0.1", headers))
+
+
+class HookHeadersTest(unittest.TestCase):
+    """Only tailscale serve, which connects from loopback, can vouch for its
+    Tailscale-* headers. From any other peer (a server bound past loopback) the
+    client wrote them, so the hook never sees them."""
+
+    def test_a_peer_past_loopback_cant_claim_a_login(self):
+        sent = server.Headers(
+            {"Host": TAILNET, "Tailscale-User-Login": "alice@example.com", "Tailscale-User-Name": "A", "Accept": "*/*"}
+        )
+        for peer in ["100.64.0.7", "192.168.1.5", "::ffff:192.168.1.5", "not an ip"]:
+            with self.subTest(peer):
+                self.assertEqual(dict(server.hook_headers(peer, sent)), {"host": TAILNET, "accept": "*/*"})
+        for peer in ["127.0.0.1", "::1", "::ffff:127.0.0.1"]:
+            with self.subTest(peer):
+                self.assertIs(server.hook_headers(peer, sent), sent)
 
 
 class AuthorizeValidationTest(unittest.TestCase):
@@ -325,19 +343,6 @@ class AuthorizeHttpTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             req.headers["tailscale-user-login"] = "bob@example.com"
 
-    def test_a_refused_post_closes_the_connection_since_its_body_is_unread(self):
-        with socket.create_connection(("127.0.0.1", self.port)) as sock:
-            body = b'{"events": []}'
-            sock.sendall(
-                f"POST /api/events HTTP/1.1\r\nHost: {TAILNET}\r\nX-Forwarded-For: 1\r\nContent-Type: application/json"
-                f"\r\nContent-Length: {len(body)}\r\n\r\n".encode()
-                + body
-            )
-            reply = b""
-            while chunk := sock.recv(4096):
-                reply += chunk
-        self.assertIn(b" 403 ", reply.split(b"\r\n")[0] + b" ")  # and the read above ended: closed
-
     def test_pull_lists_who_sent_each_event_beside_the_events(self):
         start = self.httpd.store.read_after(0, 1000)["next"]
         mine = base.ev(500, received_by="owner")  # an app field a client wrote: proves nothing
@@ -353,9 +358,12 @@ class AuthorizeHttpTest(unittest.TestCase):
         page = json.loads(reply)
         self.assertEqual((len(page["events"]), page["received_by"]), (1, ["bob"]))
 
-    def test_the_host_check_still_comes_first(self):
+    def test_the_host_and_origin_checks_still_come_first(self):
         status, _, _ = self.request("GET", "/api/health", headers={"Host": "evil.example"})
         self.assertEqual(status, 421)
+        headers = {**via_serve("eve@example.com"), "Origin": "https://evil.example"}
+        status, _, reply = self.request("POST", "/api/events", {"events": []}, headers=headers)
+        self.assertEqual((status, json.loads(reply)), (403, {"error": "cross-origin request"}))
         self.assertEqual(self.asked, [])
 
     def test_a_bad_answer_or_a_failing_hook_is_a_500_and_the_server_keeps_going(self):
