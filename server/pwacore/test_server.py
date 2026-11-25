@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import socket
 import subprocess
@@ -702,6 +703,53 @@ class ConnectionCapTest(unittest.TestCase):
             time.sleep(0.05)
         else:
             self.fail("the freed slot was not reused")
+
+
+class ListenQueueTest(unittest.TestCase):
+    """A page load opens many connections at once (a proxy such as tailscale
+    serve opens one per module). The kernel holds each in the listen queue
+    until the accept loop takes it; past the queue it is dropped or refused,
+    and the page never loads. Python's default queue is 5."""
+
+    BURST = 40
+
+    def test_the_queue_holds_every_connection_the_server_can_take(self):
+        self.assertGreaterEqual(
+            server.CappedServer.request_queue_size, server.MAX_CONNECTIONS + server.CappedServer.BUSY_QUEUE
+        )
+
+    def test_a_burst_waits_in_the_queue_and_every_request_is_served(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        httpd = server.make_server("127.0.0.1", 0, Path(tmp.name) / "e.db", Path(tmp.name), quiet=True)
+        self.addCleanup(httpd.store.close)
+        self.addCleanup(httpd.server_close)
+        port = httpd.server_address[1]
+
+        def connect(_):
+            try:
+                return socket.create_connection(("127.0.0.1", port), timeout=2)
+            except OSError:
+                return None
+
+        # The accept loop has not started, so every connection must wait in the queue.
+        with concurrent.futures.ThreadPoolExecutor(self.BURST) as pool:
+            socks = list(pool.map(connect, range(self.BURST)))
+        for s in socks:
+            if s is not None:
+                self.addCleanup(s.close)
+        lost = sum(s is None for s in socks)
+        self.assertEqual(lost, 0, f"{lost} of {self.BURST} connections did not fit in the listen queue")
+
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        for s in socks:
+            s.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        for s in socks:
+            head = b""
+            while b"\r\n" not in head and (chunk := s.recv(64)):
+                head += chunk
+            self.assertRegex(head, rb"^HTTP/1\.[01] 200 ")
 
 
 BASE_CSP = (

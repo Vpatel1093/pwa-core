@@ -723,6 +723,11 @@ class CappedServer(ThreadingHTTPServer):
     would reset it, and the client would lose the reply.)"""
 
     BUSY_QUEUE = 16  # past this many waiting for their 503, a connection is just closed
+    # The kernel's listen queue: connections that arrive faster than the accept
+    # loop takes them wait here. Python's default is 5, and a page load through
+    # tailscale serve opens one connection per module, so most were refused.
+    # The cap above, not the kernel, should decide who waits. (macOS limits it to 128.)
+    request_queue_size = 128
 
     def __init__(self, address, handler, max_connections=MAX_CONNECTIONS):
         self._slots = threading.BoundedSemaphore(max_connections)
